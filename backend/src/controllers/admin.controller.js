@@ -1,7 +1,7 @@
 const dotenv = require('dotenv');
 const jwt = require('jsonwebtoken');
 const { query } = require('../config/db');
-const { pushSlotCounts, sendServoCommand } = require('../services/blynk.service');
+const { pushSlotCounts, sendGateCommand } = require('../services/mqttBridge.service');
 
 dotenv.config();
 
@@ -45,7 +45,7 @@ const resetSlot = async (req, res, next) => {
 const triggerServo = async (req, res, next) => {
   try {
     const { slotNumber, command } = req.body;
-    await sendServoCommand(slotNumber, command);
+    await sendGateCommand(slotNumber, command);
     const io = req.app.get('io');
     if (io) {
       io.emit('servoCommand', { slotNumber, command });

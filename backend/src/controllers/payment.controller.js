@@ -1,6 +1,6 @@
 const { query } = require('../config/db');
 const { getTransactionById, markTransactionPaid, updateTransactionStatus } = require('../services/paymentMock.service');
-const { pushSlotCounts, pushLastVoucher } = require('../services/blynk.service');
+const { pushSlotCounts, announceVoucher } = require('../services/mqttBridge.service');
 
 const getTransaction = async (req, res, next) => {
   try {
@@ -28,7 +28,7 @@ const payTransaction = async (req, res, next) => {
     await markTransactionPaid(transactionId);
     await query("UPDATE slots SET status = 'reserved', updatedAt = now() WHERE id = $1", [transaction.voucherSlotId]);
     await pushSlotCounts();
-    await pushLastVoucher(transaction.voucherCode);
+    await announceVoucher(transaction.voucherCode, transaction.slotNumber);
     const io = req.app.get('io');
     if (io) {
       io.emit('paymentSuccess', { transactionId: Number(transactionId), voucherCode: transaction.voucherCode });

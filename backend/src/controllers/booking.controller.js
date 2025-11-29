@@ -1,7 +1,7 @@
 const dotenv = require('dotenv');
 const { query } = require('../config/db');
 const { createVoucherForSlot, getVoucherByCode, setVoucherStatus } = require('../services/voucher.service');
-const { pushSlotCounts, pushLastVoucher } = require('../services/blynk.service');
+const { pushSlotCounts, announceVoucher } = require('../services/mqttBridge.service');
 const { logger } = require('../utils/logger');
 
 dotenv.config();
@@ -44,7 +44,7 @@ const createBooking = async (req, res, next) => {
     );
 
     await pushSlotCounts();
-    await pushLastVoucher(voucher.code);
+    await announceVoucher(voucher.code, slot.slotNumber);
     const io = req.app.get('io');
     if (io) {
       io.emit('slotUpdate', { slotNumber: slot.slotNumber, status: 'reserved' });
