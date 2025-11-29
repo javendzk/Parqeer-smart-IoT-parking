@@ -82,9 +82,9 @@ const Booking = () => {
             <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <p className="text-sm font-semibold text-slate-500">Manual slot entry</p>
               <div className="text-4xl font-bold tracking-[0.3em] text-slate-900 min-h-[3rem]">
-                {manualSlot || '---'}
+                {manualSlot || '------'}
               </div>
-              <Numpad value={manualSlot} onChange={setManualSlot} length={3} />
+              <Numpad value={manualSlot} onChange={setManualSlot} length={6} />
             </div>
             <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <label className="block text-sm font-semibold text-slate-500">Quick pick</label>
