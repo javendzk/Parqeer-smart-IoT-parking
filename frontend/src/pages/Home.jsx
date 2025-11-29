@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import SlotCard from '../components/SlotCard.jsx';
 import { getSlots } from '../api/apiClient.js';
 import { useSocket } from '../contexts/SocketContext.jsx';
@@ -8,6 +9,7 @@ const Home = () => {
   const [availableCount, setAvailableCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const socket = useSocket();
+  const navigate = useNavigate();
 
   const loadSlots = useCallback(async () => {
     setLoading(true);
@@ -23,6 +25,14 @@ const Home = () => {
   useEffect(() => {
     loadSlots();
   }, [loadSlots]);
+
+  const handleSlotTap = useCallback(
+    (slot) => {
+      if (slot.status !== 'available') return;
+      navigate('/booking', { state: { slotNumber: slot.slotNumber } });
+    },
+    [navigate]
+  );
 
   useEffect(() => {
     if (!socket) return undefined;
@@ -78,7 +88,7 @@ const Home = () => {
         ) : (
           <div className="grid-auto-fill">
             {slots.map((slot) => (
-              <SlotCard key={slot.id || slot.slotNumber} slot={slot} />
+              <SlotCard key={slot.id || slot.slotNumber} slot={slot} onSelect={handleSlotTap} />
             ))}
           </div>
         )}

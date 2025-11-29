@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const { param, body } = require('express-validator');
-const { getTransaction, payTransaction, paymentCallback } = require('../controllers/payment.controller');
+const { getTransaction, getTransactionByPaymentToken, payTransaction, paymentCallback } = require('../controllers/payment.controller');
 const validateRequest = require('../middlewares/validateRequest');
 
 const router = Router();
@@ -10,6 +10,13 @@ router.get(
   [param('transactionId').isInt({ min: 1 })],
   validateRequest,
   getTransaction
+);
+
+router.get(
+  '/payment/token/:paymentToken',
+  [param('paymentToken').isLength({ min: 6 })],
+  validateRequest,
+  getTransactionByPaymentToken
 );
 
 router.post(

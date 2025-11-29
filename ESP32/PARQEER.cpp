@@ -68,8 +68,8 @@ const int irSensorPins[4] = {18, 19, 21, 22};
 const int servoPins[4] = {26, 27, 33, 32};
 
 // Servo Positions
-const int SERVO_CLOSED = 0;
-const int SERVO_OPEN = 90;
+const int SERVO_CLOSED = 90;
+const int SERVO_OPEN = 0;
 
 // Keypad Configuration
 const byte ROWS = 4;

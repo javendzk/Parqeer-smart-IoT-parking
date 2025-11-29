@@ -16,16 +16,25 @@ const statusStyles = {
   }
 };
 
-const SlotCard = ({ slot, onSelect, selected }) => {
+const SlotCard = ({ slot, onSelect, selected, disabled = false, processing = false }) => {
   const style = statusStyles[slot.status] || statusStyles.available;
+  const isAvailable = slot.status === 'available';
+  const isDisabled = processing || disabled || !isAvailable;
+  const statusCopy = processing
+    ? 'Reserving...'
+    : isAvailable
+      ? disabled
+        ? 'Please wait...'
+        : 'Tap to reserve this slot'
+      : 'Currently locked';
   return (
     <button
       type="button"
       onClick={() => onSelect?.(slot)}
-      disabled={slot.status === 'occupied'}
+      disabled={isDisabled}
       className={`bg-glass border ${style.border} rounded-2xl p-4 text-left shadow-sm transition transform hover:-translate-y-0.5 focus-visible:ring focus-visible:ring-brand-primary focus:outline-none ${
         selected ? 'ring-2 ring-brand-primary' : ''
-      } ${slot.status === 'occupied' ? 'cursor-not-allowed opacity-60' : ''}`}
+      } ${isDisabled ? 'cursor-not-allowed opacity-60' : ''}`}
     >
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium text-slate-500">Slot #{slot.slotNumber}</span>
@@ -34,7 +43,7 @@ const SlotCard = ({ slot, onSelect, selected }) => {
       <div className="mt-4 text-3xl font-bold text-slate-900">{slot.status === 'available' ? 'Ready' : slot.status}</div>
       <div className="mt-6 flex items-center gap-2 text-sm text-slate-500">
         <span className={`h-2 w-2 rounded-full ${style.dot}`} />
-        {slot.status === 'available' ? 'Tap to reserve this slot' : 'Currently locked'}
+        {statusCopy}
       </div>
     </button>
   );

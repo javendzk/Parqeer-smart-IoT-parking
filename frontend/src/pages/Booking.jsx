@@ -12,6 +12,7 @@ const Booking = () => {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [activeSlotNumber, setActiveSlotNumber] = useState(null);
 
   const availableSlots = useMemo(() => slots.filter((slot) => slot.status === 'available'), [slots]);
 
@@ -35,23 +36,46 @@ const Booking = () => {
     return undefined;
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const reserveSlot = async (slotNumber) => {
     setSubmitting(true);
     setError('');
     try {
       const payload = {};
-      const slotNumber = slotNumberToSend();
       if (slotNumber) payload.slotNumber = slotNumber;
       const result = await createBooking(payload);
       setVoucherDetails(result);
       setManualSlot('');
       setSelectedSlot(null);
-      loadSlots();
+      await loadSlots();
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to create booking');
+      throw err;
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleSlotTap = async (slot) => {
+    if (slot.status !== 'available' || submitting) return;
+    setSelectedSlot(slot);
+    setManualSlot('');
+    setActiveSlotNumber(slot.slotNumber);
+    try {
+      await reserveSlot(slot.slotNumber);
+    } catch (err) {
+      // error already captured in state
+    } finally {
+      setActiveSlotNumber(null);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const slotNumber = slotNumberToSend();
+    try {
+      await reserveSlot(slotNumber);
+    } catch (err) {
+      // error already captured in state
     }
   };
 
@@ -67,14 +91,19 @@ const Booking = () => {
               <p className="text-slate-500">Loading slots...</p>
             ) : (
               <div className="grid-auto-fill">
-                {slots.map((slot) => (
-                  <SlotCard
-                    key={slot.id || slot.slotNumber}
-                    slot={slot}
-                    onSelect={() => setSelectedSlot(slot)}
-                    selected={selectedSlot?.slotNumber === slot.slotNumber}
-                  />
-                ))}
+                {slots.map((slot) => {
+                  const isActive = activeSlotNumber === slot.slotNumber;
+                  return (
+                    <SlotCard
+                      key={slot.id || slot.slotNumber}
+                      slot={slot}
+                      onSelect={handleSlotTap}
+                      selected={selectedSlot?.slotNumber === slot.slotNumber || isActive}
+                      disabled={submitting && !isActive}
+                      processing={isActive && submitting}
+                    />
+                  );
+                })}
               </div>
             )}
           </div>

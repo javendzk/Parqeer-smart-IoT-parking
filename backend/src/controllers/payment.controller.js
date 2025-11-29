@@ -1,6 +1,7 @@
 const { query } = require('../config/db');
-const { getTransactionById, markTransactionPaid, updateTransactionStatus } = require('../services/paymentMock.service');
+const { getTransactionById, getTransactionByToken, markTransactionPaid, updateTransactionStatus } = require('../services/paymentMock.service');
 const { pushSlotCounts, announceVoucher } = require('../services/mqttBridge.service');
+const { buildPaymentUrl } = require('../utils/url');
 
 const getTransaction = async (req, res, next) => {
   try {
@@ -9,7 +10,20 @@ const getTransaction = async (req, res, next) => {
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found' });
     }
-    res.json({ transaction });
+    res.json({ transaction: { ...transaction, paymentUrl: buildPaymentUrl(transaction.paymenttoken), paymentToken: transaction.paymenttoken } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getTransactionByPaymentToken = async (req, res, next) => {
+  try {
+    const { paymentToken } = req.params;
+    const transaction = await getTransactionByToken(paymentToken);
+    if (!transaction) {
+      return res.status(404).json({ message: 'Transaction not found' });
+    }
+    res.json({ transaction: { ...transaction, paymentUrl: buildPaymentUrl(transaction.paymenttoken), paymentToken: transaction.paymenttoken } });
   } catch (error) {
     next(error);
   }
@@ -55,4 +69,4 @@ const paymentCallback = async (req, res, next) => {
   }
 };
 
-module.exports = { getTransaction, payTransaction, paymentCallback };
+module.exports = { getTransaction, getTransactionByPaymentToken, payTransaction, paymentCallback };

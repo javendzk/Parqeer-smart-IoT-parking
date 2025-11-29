@@ -65,6 +65,7 @@ const getSlots = () => unwrap(apiClient.get('/slots'));
 const createBooking = (payload) => unwrap(apiClient.post('/book', payload));
 const getVoucher = (code) => unwrap(apiClient.get(`/voucher/${code}`));
 const getTransaction = (transactionId) => unwrap(apiClient.get(`/payment/${transactionId}`));
+const getTransactionByToken = (paymentToken) => unwrap(apiClient.get(`/payment/token/${paymentToken}`));
 const payTransaction = (transactionId) => unwrap(apiClient.post(`/payment/${transactionId}/pay`));
 const adminLogin = (payload) => unwrap(apiClient.post('/admin/login', payload));
 const getAdminOverview = (token) => unwrap(apiClient.get('/admin/overview', withAuth(token)));
@@ -77,6 +78,7 @@ export {
   createBooking,
   getVoucher,
   getTransaction,
+  getTransactionByToken,
   payTransaction,
   adminLogin,
   getAdminOverview,

@@ -3,6 +3,7 @@ const { query } = require('../config/db');
 const { createVoucherForSlot, getVoucherByCode, setVoucherStatus } = require('../services/voucher.service');
 const { pushSlotCounts, announceVoucher } = require('../services/mqttBridge.service');
 const { logger } = require('../utils/logger');
+const { buildPaymentUrl, createPaymentToken } = require('../utils/url');
 
 dotenv.config();
 
@@ -38,9 +39,10 @@ const createBooking = async (req, res, next) => {
 
     await query("UPDATE slots SET status = 'reserved', updatedAt = now() WHERE id = $1", [slot.id]);
     const voucher = await createVoucherForSlot(slot.id, ttlMinutes);
+    const paymentToken = createPaymentToken();
     const transaction = await query(
-      "INSERT INTO transactions (voucherId, amount, status) VALUES ($1, $2, $3) RETURNING *",
-      [voucher.id, 0, 'pending']
+      "INSERT INTO transactions (voucherId, amount, status, paymentToken) VALUES ($1, $2, $3, $4) RETURNING *",
+      [voucher.id, 0, 'pending', paymentToken]
     );
 
     await pushSlotCounts();
@@ -51,10 +53,15 @@ const createBooking = async (req, res, next) => {
       io.emit('voucherCreated', { code: voucher.code, slotNumber: slot.slotNumber });
     }
 
+    const transactionRow = transaction.rows[0];
+    const paymentUrl = buildPaymentUrl(transactionRow.paymenttoken || paymentToken);
+
     res.status(201).json({
       voucherCode: voucher.code,
-      transactionId: transaction.rows[0].id,
-      expiresAt: voucher.expiresAt
+      transactionId: transactionRow.id,
+      paymentToken: transactionRow.paymenttoken || paymentToken,
+      expiresAt: voucher.expiresAt,
+      paymentUrl
     });
   } catch (error) {
     if (slot?.id) {
