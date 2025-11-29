@@ -39,6 +39,7 @@ const publish = (topic, payload) => {
   }
   return new Promise((resolve, reject) => {
     const message = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    logger.info('MQTT publish', { topic, payload: message });
     client.publish(topic, message, { qos: 1 }, (err) => {
       if (err) {
         logger.error('MQTT publish failed', { topic, error: err.message });
@@ -71,6 +72,7 @@ const subscribe = (topic, handler) => {
     logger.warn('MQTT subscribe skipped, client not configured', { topic });
     return;
   }
+  logger.info('MQTT subscribe', { topic });
   client.subscribe(topic, { qos: 1 }, (err) => {
     if (err) {
       logger.error('MQTT subscribe failed', { topic, error: err.message });
@@ -79,7 +81,9 @@ const subscribe = (topic, handler) => {
   client.on('message', (incomingTopic, message) => {
     if (!matches(topic, incomingTopic)) return;
     try {
-      const parsed = JSON.parse(message.toString());
+      const rawPayload = message.toString();
+      logger.info('MQTT message received', { topic: incomingTopic, payload: rawPayload });
+      const parsed = JSON.parse(rawPayload);
       handler(parsed, incomingTopic);
     } catch (error) {
       logger.error('MQTT message parse error', { topic: incomingTopic, error: error.message });
