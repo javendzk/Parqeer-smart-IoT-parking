@@ -56,7 +56,7 @@ const Home = () => {
         <p className="text-sm font-semibold uppercase tracking-widest text-brand-secondary">Smart Valet Parking</p>
         <h1 className="mt-3 text-4xl font-bold text-slate-900">Monitor slots and guide valet guests in real-time</h1>
         <p className="mt-4 max-w-2xl text-slate-500">
-          Connected to ESP32 hardware, Blynk Cloud, and our payment simulator for a seamless valet experience.
+          Connected to ESP32 hardware, a HiveMQ Cloud MQTT bridge, and our payment simulator for a seamless valet experience.
         </p>
         <div className="mt-6 flex flex-wrap gap-6">
           <div className="rounded-2xl border border-slate-200 bg-white px-6 py-4 text-center">

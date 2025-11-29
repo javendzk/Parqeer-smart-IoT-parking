@@ -3,6 +3,7 @@ const { Server } = require('socket.io');
 const dotenv = require('dotenv');
 const app = require('./app');
 const { logger } = require('./utils/logger');
+const { initMqttBridge } = require('./services/mqttBridge.service');
 
 dotenv.config();
 
@@ -15,6 +16,7 @@ const io = new Server(server, {
 });
 
 app.set('io', io);
+initMqttBridge(app);
 
 io.on('connection', (socket) => {
   logger.info('Socket connected', { id: socket.id });
