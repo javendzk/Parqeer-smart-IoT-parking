@@ -29,10 +29,10 @@
  * - All GND must be COMMON Ground
  * - Supply servo with external 5V if powerful servo is used
  * - MQTT Broker: HiveMQ Cloud (TLS on port 8883)
- * - Designed compatible with backend:
- *    validate voucher → /api/iot/validate
- *    update sensor   → /api/iot/sensor-update
- *    servo callback  → /api/iot/servo-callback
+ * - Designed to work with backend base path `/api/v1`
+ *    validate voucher → /api/v1/iot/validate
+ *    update sensor   → /api/v1/iot/sensor-update
+ *    servo callback  → /api/v1/iot/servo-callback
  */
 
 #include <WiFi.h>
@@ -46,17 +46,17 @@
 // ==================== CONFIGURATION ====================
 
 // WiFi Credentials
-#define WIFI_SSID "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define WIFI_SSID "Wokwi-GUEST"
+#define WIFI_PASSWORD ""
 
 // MQTT HiveMQ Cloud Configuration
 #define MQTT_BROKER "13b2db0db2624442893404a69ca826a1.s1.eu.hivemq.cloud"
 #define MQTT_PORT 8883
 #define MQTT_USERNAME "parqeer-service"
-#define MQTT_PASSWORD "parqeer-super-secret"
+#define MQTT_PASSWORD "Parqeer1"
 
 // Backend API Configuration
-#define BACKEND_URL "https://parqeer-smart-iot-parking-production.up.railway.app"
+#define BACKEND_API_BASE "https://parqeer-smart-iot-parking-production.up.railway.app/api/v1"
 #define DEVICE_TOKEN "parqeer-device-8f2d1c7b4a"
 
 // ==================== HARDWARE PINS ====================
@@ -208,13 +208,10 @@ void reconnectMQTT() {
   if (mqttClient.connect("ESP32-Parqeer", MQTT_USERNAME, MQTT_PASSWORD)) {
     Serial.println("✓ MQTT connected!");
     
-    // Subscribe to servo control topics
-    for (int i = 1; i <= 4; i++) {
-      String topic = "parking/servo/" + String(i);
-      mqttClient.subscribe(topic.c_str());
-      Serial.print("✓ Subscribed to: ");
-      Serial.println(topic);
-    }
+    mqttClient.subscribe("parking/gate/open");
+    mqttClient.subscribe("parking/gate/close");
+    Serial.println("✓ Subscribed to: parking/gate/open");
+    Serial.println("✓ Subscribed to: parking/gate/close");
   } else {
     Serial.print("✗ MQTT connection failed, rc=");
     Serial.println(mqttClient.state());
@@ -235,21 +232,37 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.println(message);
   
   String topicStr = String(topic);
-  
-  // Parse servo control topic: parking/servo/{n}
-  if (topicStr.startsWith("parking/servo/")) {
-    int slotNumber = topicStr.substring(14).toInt();
-    
-    if (slotNumber >= 1 && slotNumber <= 4) {
-      if (message == "open") {
-        Serial.print("Opening servo for slot ");
-        Serial.println(slotNumber);
-        openServo(slotNumber - 1);
-      } else if (message == "close") {
-        Serial.print("Closing servo for slot ");
-        Serial.println(slotNumber);
-        closeServo(slotNumber - 1);
-      }
+  bool isOpenTopic = topicStr == "parking/gate/open";
+  bool isCloseTopic = topicStr == "parking/gate/close";
+
+  if (isOpenTopic || isCloseTopic) {
+    StaticJsonDocument<200> doc;
+    DeserializationError error = deserializeJson(doc, message);
+    if (error) {
+      Serial.print("✗ Failed to parse gate command JSON: ");
+      Serial.println(error.c_str());
+      return;
+    }
+
+    int slotNumber = doc["slotNumber"] | 0;
+    String command = doc["command"] | String(isOpenTopic ? "open" : "close");
+
+    if (slotNumber < 1 || slotNumber > 4) {
+      Serial.println("✗ Invalid slot number in gate command");
+      return;
+    }
+
+    if (command == "open") {
+      Serial.print("Opening servo for slot ");
+      Serial.println(slotNumber);
+      openServo(slotNumber - 1);
+    } else if (command == "close") {
+      Serial.print("Closing servo for slot ");
+      Serial.println(slotNumber);
+      closeServo(slotNumber - 1);
+    } else {
+      Serial.print("✗ Unknown gate command: ");
+      Serial.println(command);
     }
   }
 }
@@ -298,7 +311,7 @@ void validateVoucher(String code) {
   }
   
   HTTPClient http;
-  String url = String(BACKEND_URL) + "/api/iot/validate";
+  String url = String(BACKEND_API_BASE) + "/iot/validate";
   
   http.begin(url);
   http.addHeader("Content-Type", "application/json");
@@ -310,6 +323,10 @@ void validateVoucher(String code) {
   
   String payload;
   serializeJson(doc, payload);
+  Serial.print("POST ");
+  Serial.print(url);
+  Serial.print(" payload: ");
+  Serial.println(payload);
   
   Serial.println("Sending validation request...");
   int httpCode = http.POST(payload);
@@ -399,10 +416,18 @@ void checkSensor(int index) {
     
     // Publish to MQTT
     if (mqttClient.connected()) {
-      String topic = "parking/slot/" + String(index + 1) + "/state";
-      mqttClient.publish(topic.c_str(), status.c_str());
+      String topic = "parking/slot/" + String(index + 1) + "/status";
+      StaticJsonDocument<200> payload;
+      payload["slotNumber"] = index + 1;
+      payload["status"] = status;
+      payload["deviceId"] = "esp32-main";
+      char buffer[128];
+      serializeJson(payload, buffer, sizeof(buffer));
+      mqttClient.publish(topic.c_str(), buffer);
       Serial.print("✓ Published to ");
       Serial.println(topic);
+      Serial.print("Payload: ");
+      Serial.println(buffer);
     }
     
     if (!currentState && servoOpenStates[index]) {
@@ -420,7 +445,7 @@ void sendSensorUpdate(int slotNumber, String status) {
   }
   
   HTTPClient http;
-  String url = String(BACKEND_URL) + "/api/iot/sensor-update";
+  String url = String(BACKEND_API_BASE) + "/iot/sensor-update";
   
   http.begin(url);
   http.addHeader("Content-Type", "application/json");
@@ -434,12 +459,19 @@ void sendSensorUpdate(int slotNumber, String status) {
   
   String payload;
   serializeJson(doc, payload);
+  Serial.print("POST ");
+  Serial.print(url);
+  Serial.print(" payload: ");
+  Serial.println(payload);
   
   int httpCode = http.POST(payload);
   
   if (httpCode > 0) {
+    String response = http.getString();
     Serial.print("Sensor update sent: ");
     Serial.println(httpCode);
+    Serial.print("Response body: ");
+    Serial.println(response);
   } else {
     Serial.print("Sensor update failed: ");
     Serial.println(http.errorToString(httpCode));
@@ -498,7 +530,7 @@ void sendServoCallback(String state, int slotNumber) {
   }
   
   HTTPClient http;
-  String url = String(BACKEND_URL) + "/api/iot/servo-callback";
+  String url = String(BACKEND_API_BASE) + "/iot/servo-callback";
   
   http.begin(url);
   http.addHeader("Content-Type", "application/json");
@@ -510,16 +542,37 @@ void sendServoCallback(String state, int slotNumber) {
   
   String payload;
   serializeJson(doc, payload);
+  Serial.print("POST ");
+  Serial.print(url);
+  Serial.print(" payload: ");
+  Serial.println(payload);
   
-  http.POST(payload);
+  int httpCode = http.POST(payload);
+  if (httpCode > 0) {
+    Serial.print("Servo callback status: ");
+    Serial.println(httpCode);
+    Serial.print("Response body: ");
+    Serial.println(http.getString());
+  } else {
+    Serial.print("Servo callback failed: ");
+    Serial.println(http.errorToString(httpCode));
+  }
   http.end();
   
   // Publish to MQTT
   if (mqttClient.connected()) {
-    String topic = "parking/servo/" + String(slotNumber) + "/state";
-    mqttClient.publish(topic.c_str(), state.c_str());
+    StaticJsonDocument<200> payload;
+    payload["slotNumber"] = slotNumber;
+    payload["state"] = state;
+    payload["deviceId"] = "esp32-main";
+    char buffer[128];
+    serializeJson(payload, buffer, sizeof(buffer));
+    const char* topic = "parking/gate/state";
+    mqttClient.publish(topic, buffer);
     Serial.print("✓ Published to ");
     Serial.println(topic);
+    Serial.print("Payload: ");
+    Serial.println(buffer);
   }
 }
 

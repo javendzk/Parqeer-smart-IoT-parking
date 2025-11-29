@@ -31,7 +31,7 @@ const payTransaction = async (req, res, next) => {
     await announceVoucher(transaction.voucherCode, transaction.slotNumber);
     const io = req.app.get('io');
     if (io) {
-      io.emit('paymentSuccess', { transactionId: Number(transactionId), voucherCode: transaction.voucherCode });
+      io.emit('paymentSuccess', { transactionId:      Number(transactionId), voucherCode: transaction.voucherCode });
     }
     res.json({ success: true });
   } catch (error) {

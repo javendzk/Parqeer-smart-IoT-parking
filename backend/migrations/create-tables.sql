@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS slots (
   updatedAt TIMESTAMP DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS vouchers (
+CREATE TABLE IF NOT EXISTS vouchers (   
   id SERIAL PRIMARY KEY,
   code CHAR(6) UNIQUE NOT NULL,
   slotId INT REFERENCES slots(id),

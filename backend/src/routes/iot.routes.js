@@ -18,7 +18,7 @@ router.post(
     body('deviceId').optional().isString(),
     body('slotNumber').isInt({ min: 1 }),
     body('sensorIndex').isInt({ min: 0 }),
-    body('value').isIn(['occupied', 'empty'])
+    body('value').isIn(['occupied', 'available', 'reserved', 'empty'])
   ],
   validateRequest,
   handleSensorUpdate
