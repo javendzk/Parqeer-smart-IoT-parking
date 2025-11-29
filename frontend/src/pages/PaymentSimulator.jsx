@@ -82,6 +82,7 @@ const PaymentSimulator = () => {
   };
 
   const paymentUrl = transaction ? transaction.paymentUrl || `${appUrl}/payment/${transaction.paymentToken || paymentToken}` : '';
+  const voucherUnlocked = transaction?.status === 'paid';
 
   if (loading) {
     return <p className="text-center text-slate-500">Loading transaction...</p>;
@@ -99,7 +100,11 @@ const PaymentSimulator = () => {
       <div className="mt-6 grid gap-4 sm:grid-cols-2">
         <div className="rounded-2xl border border-slate-200 p-4">
           <p className="text-sm text-slate-500">Voucher</p>
-          <p className="text-2xl font-bold tracking-[0.3em] text-slate-900">{transaction.voucherCode}</p>
+          {voucherUnlocked ? (
+            <p className="text-2xl font-bold tracking-[0.3em] text-slate-900">{transaction.voucherCode}</p>
+          ) : (
+            <p className="text-sm font-medium text-amber-600">Voucher akan muncul setelah pembayaran berhasil.</p>
+          )}
         </div>
         <div className="rounded-2xl border border-slate-200 p-4">
           <p className="text-sm text-slate-500">Slot</p>
@@ -133,7 +138,7 @@ const PaymentSimulator = () => {
       </div>
       {statusMessage && <p className="mt-4 text-center text-brand-secondary">{statusMessage}</p>}
       <button type="button" className="btn-primary mt-8 w-full py-4 text-xl" onClick={openPrompt} disabled={transaction.status === 'paid'}>
-        {transaction.status === 'paid' ? 'Already paid' : 'Bayar Sekarang'}
+        {transaction.status === 'paid' ? 'Payment complete' : 'Bayar Sekarang'}
       </button>
       {showPrompt && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 px-4">
