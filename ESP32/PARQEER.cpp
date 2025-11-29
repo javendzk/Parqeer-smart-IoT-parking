@@ -1,11 +1,11 @@
 /*
- * Parqeer Smart IoT Parking System - ESP32 Main Program (UPDATED PINOUT)
+ * Parqeer Smart IoT Parking System - ESP32 Main Program (MQTT HiveMQ Version)
  * 
  * Features:
  * - 4 IR Sensors for parking slot detection
  * - 4 Servo motors for gate/gate arm control
  * - 4x4 Keypad for voucher input
- * - WiFi connectivity to Backend API + Blynk Cloud
+ * - WiFi connectivity to Backend API + MQTT HiveMQ Cloud
  * 
  * Hardware Pinout (Final - Safe for ESP32):
  * 
@@ -28,6 +28,7 @@
  * Notes:
  * - All GND must be COMMON Ground
  * - Supply servo with external 5V if powerful servo is used
+ * - MQTT Broker: HiveMQ Cloud (TLS on port 8883)
  * - Designed compatible with backend:
  *    validate voucher → /api/iot/validate
  *    update sensor   → /api/iot/sensor-update
@@ -35,8 +36,9 @@
  */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <BlynkSimpleEsp32.h>
+#include <PubSubClient.h>
 #include <ESP32Servo.h>
 #include <Keypad.h>
 #include <ArduinoJson.h>
@@ -47,24 +49,15 @@
 #define WIFI_SSID "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
 
+// MQTT HiveMQ Cloud Configuration
+#define MQTT_BROKER "13b2db0db2624442893404a69ca826a1.s1.eu.hivemq.cloud"
+#define MQTT_PORT 8883
+#define MQTT_USERNAME "YOUR_MQTT_USERNAME"
+#define MQTT_PASSWORD "YOUR_MQTT_PASSWORD"
+
 // Backend API Configuration
 #define BACKEND_URL "http://YOUR_BACKEND_IP:4000"
 #define DEVICE_TOKEN "sample_device_token"
-
-// Blynk Configuration
-#define BLYNK_TEMPLATE_ID "YOUR_TEMPLATE_ID"
-#define BLYNK_TEMPLATE_NAME "Parqeer Smart Parking"
-#define BLYNK_AUTH_TOKEN "YOUR_BLYNK_AUTH_TOKEN"
-
-// Virtual Pins
-#define VPIN_AVAILABLE_COUNT V0
-#define VPIN_SLOT_SUMMARY V1
-#define VPIN_SERVO_COMMAND V2
-#define VPIN_SENSOR_SLOT_1 V3
-#define VPIN_SENSOR_SLOT_2 V4
-#define VPIN_SENSOR_SLOT_3 V5
-#define VPIN_SENSOR_SLOT_4 V6
-#define VPIN_LAST_VOUCHER V7
 
 // ==================== HARDWARE PINS ====================
 
@@ -88,23 +81,25 @@ char keys[ROWS][COLS] = {
   {'*', '0', '#', 'D'}
 };
 byte rowPins[ROWS] = {32, 25, 4, 5};
-byte colPins[COLS] = {14, 27, 33, 26}; 
+byte colPins[COLS] = {14, 27, 33, 26};
 
 // ==================== OBJECTS ====================
 
+WiFiClientSecure wifiClient;
+PubSubClient mqttClient(wifiClient);
 Servo servos[4];
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
 // ==================== VARIABLES ====================
 
 String voucherCode = "";
-bool sensorStates[4] = {false, false, false, false}; // false = empty, true = occupied
+bool sensorStates[4] = {false, false, false, false};
 unsigned long lastSensorCheck[4] = {0, 0, 0, 0};
-unsigned long lastBlynkUpdate = 0;
+unsigned long lastMqttReconnect = 0;
 
-const unsigned long SENSOR_DEBOUNCE = 2000; // 2 seconds debounce
-const unsigned long BLYNK_UPDATE_INTERVAL = 5000; // Update Blynk every 5 seconds
-const unsigned long SERVO_AUTO_CLOSE_DELAY = 5000; // Auto-close gate after 5 seconds
+const unsigned long SENSOR_DEBOUNCE = 2000;
+const unsigned long MQTT_RECONNECT_INTERVAL = 5000;
+const unsigned long SERVO_AUTO_CLOSE_DELAY = 5000;
 const int VOUCHER_LENGTH = 6;
 
 bool servoOpenStates[4] = {false, false, false, false};
@@ -114,7 +109,7 @@ unsigned long servoOpenTime[4] = {0, 0, 0, 0};
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n=== Parqeer Smart Parking System ===");
+  Serial.println("\n=== Parqeer Smart Parking System (MQTT) ===");
   
   // Initialize IR Sensors
   for (int i = 0; i < 4; i++) {
@@ -132,10 +127,10 @@ void setup() {
   // Connect to WiFi
   connectWiFi();
   
-  // Initialize Blynk
-  Blynk.config(BLYNK_AUTH_TOKEN);
-  Blynk.connect();
-  Serial.println("✓ Blynk connected");
+  // Setup MQTT
+  wifiClient.setInsecure();
+  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
   
   // Initial sensor readings
   checkAllSensors();
@@ -146,7 +141,20 @@ void setup() {
 // ==================== MAIN LOOP ====================
 
 void loop() {
-  Blynk.run();
+  // Handle WiFi reconnection
+  if (WiFi.status() != WL_CONNECTED) {
+    connectWiFi();
+  }
+  
+  // Handle MQTT connection and messages
+  if (!mqttClient.connected()) {
+    if (millis() - lastMqttReconnect > MQTT_RECONNECT_INTERVAL) {
+      reconnectMQTT();
+      lastMqttReconnect = millis();
+    }
+  } else {
+    mqttClient.loop();
+  }
   
   // Check keypad for voucher input
   handleKeypadInput();
@@ -157,18 +165,16 @@ void loop() {
   // Auto-close servos if needed
   handleAutoCloseServos();
   
-  // Periodic Blynk updates
-  if (millis() - lastBlynkUpdate > BLYNK_UPDATE_INTERVAL) {
-    updateBlynkStatus();
-    lastBlynkUpdate = millis();
-  }
-  
   delay(50);
 }
 
 // ==================== WIFI CONNECTION ====================
 
 void connectWiFi() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
+  
   Serial.print("Connecting to WiFi");
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
@@ -188,6 +194,66 @@ void connectWiFi() {
   }
 }
 
+// ==================== MQTT CONNECTION ====================
+
+void reconnectMQTT() {
+  if (!WiFi.isConnected()) {
+    Serial.println("WiFi not connected, skipping MQTT reconnect");
+    return;
+  }
+  
+  Serial.print("Attempting MQTT connection to ");
+  Serial.println(MQTT_BROKER);
+  
+  if (mqttClient.connect("ESP32-Parqeer", MQTT_USERNAME, MQTT_PASSWORD)) {
+    Serial.println("✓ MQTT connected!");
+    
+    // Subscribe to servo control topics
+    for (int i = 1; i <= 4; i++) {
+      String topic = "parking/servo/" + String(i);
+      mqttClient.subscribe(topic.c_str());
+      Serial.print("✓ Subscribed to: ");
+      Serial.println(topic);
+    }
+  } else {
+    Serial.print("✗ MQTT connection failed, rc=");
+    Serial.println(mqttClient.state());
+  }
+}
+
+// ==================== MQTT CALLBACK ====================
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String message = "";
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  
+  Serial.print("MQTT message received on topic: ");
+  Serial.println(topic);
+  Serial.print("Payload: ");
+  Serial.println(message);
+  
+  String topicStr = String(topic);
+  
+  // Parse servo control topic: parking/servo/{n}
+  if (topicStr.startsWith("parking/servo/")) {
+    int slotNumber = topicStr.substring(14).toInt();
+    
+    if (slotNumber >= 1 && slotNumber <= 4) {
+      if (message == "open") {
+        Serial.print("Opening servo for slot ");
+        Serial.println(slotNumber);
+        openServo(slotNumber - 1);
+      } else if (message == "close") {
+        Serial.print("Closing servo for slot ");
+        Serial.println(slotNumber);
+        closeServo(slotNumber - 1);
+      }
+    }
+  }
+}
+
 // ==================== KEYPAD HANDLING ====================
 
 void handleKeypadInput() {
@@ -198,7 +264,6 @@ void handleKeypadInput() {
     Serial.println(key);
     
     if (key == '#') {
-      // Submit voucher
       if (voucherCode.length() == VOUCHER_LENGTH) {
         Serial.print("Validating voucher: ");
         Serial.println(voucherCode);
@@ -210,12 +275,10 @@ void handleKeypadInput() {
       voucherCode = "";
     } 
     else if (key == '*') {
-      // Clear voucher
       voucherCode = "";
       Serial.println("Voucher cleared");
     }
-    else if (key >= '0' && key <= '9' || key >= 'A' && key <= 'D') {
-      // Add to voucher code
+    else if ((key >= '0' && key <= '9') || (key >= 'A' && key <= 'D')) {
       if (voucherCode.length() < VOUCHER_LENGTH) {
         voucherCode += key;
         Serial.print("Voucher: ");
@@ -241,7 +304,6 @@ void validateVoucher(String code) {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("x-device-token", DEVICE_TOKEN);
   
-  // Create JSON payload
   StaticJsonDocument<200> doc;
   doc["code"] = code;
   doc["deviceId"] = "esp32-main";
@@ -260,7 +322,6 @@ void validateVoucher(String code) {
     Serial.println(response);
     
     if (httpCode == 200) {
-      // Parse response
       StaticJsonDocument<200> responseDoc;
       DeserializationError error = deserializeJson(responseDoc, response);
       
@@ -272,15 +333,27 @@ void validateVoucher(String code) {
           Serial.print("✓ Valid voucher! Opening gate for slot: ");
           Serial.println(slotNumber);
           
-          // Open corresponding servo
-          openServo(slotNumber - 1); // Convert to 0-indexed
+          openServo(slotNumber - 1);
           
-          // Update Blynk
-          Blynk.virtualWrite(VPIN_LAST_VOUCHER, code);
+          // Publish to MQTT
+          if (mqttClient.connected()) {
+            String topic = "parking/voucher/success";
+            mqttClient.publish(topic.c_str(), code.c_str());
+            Serial.print("✓ Published to ");
+            Serial.println(topic);
+          }
           
           blinkSuccess();
         } else {
           Serial.println("✗ Invalid voucher!");
+          
+          if (mqttClient.connected()) {
+            String topic = "parking/voucher/error";
+            mqttClient.publish(topic.c_str(), "invalid");
+            Serial.print("✓ Published to ");
+            Serial.println(topic);
+          }
+          
           blinkError();
         }
       }
@@ -306,15 +379,12 @@ void checkAllSensors() {
 }
 
 void checkSensor(int index) {
-  // Debounce check
   if (millis() - lastSensorCheck[index] < SENSOR_DEBOUNCE) {
     return;
   }
   
-  // Read sensor (Active LOW - LOW means obstacle detected)
-  bool currentState = !digitalRead(irSensorPins[index]); // Invert for logical state
+  bool currentState = !digitalRead(irSensorPins[index]);
   
-  // Check if state changed
   if (currentState != sensorStates[index]) {
     sensorStates[index] = currentState;
     lastSensorCheck[index] = millis();
@@ -325,14 +395,16 @@ void checkSensor(int index) {
     Serial.print(" sensor: ");
     Serial.println(status);
     
-    // Send update to backend
     sendSensorUpdate(index + 1, status);
     
-    // Update Blynk
-    int vpinIndex = VPIN_SENSOR_SLOT_1 + index;
-    Blynk.virtualWrite(vpinIndex, status);
+    // Publish to MQTT
+    if (mqttClient.connected()) {
+      String topic = "parking/slot/" + String(index + 1) + "/state";
+      mqttClient.publish(topic.c_str(), status.c_str());
+      Serial.print("✓ Published to ");
+      Serial.println(topic);
+    }
     
-    // Auto-close servo if vehicle left
     if (!currentState && servoOpenStates[index]) {
       Serial.print("Vehicle left slot ");
       Serial.print(index + 1);
@@ -389,7 +461,6 @@ void openServo(int index) {
   Serial.print(index + 1);
   Serial.println(" opened");
   
-  // Send callback to backend
   sendServoCallback("open", index + 1);
 }
 
@@ -403,16 +474,13 @@ void closeServo(int index) {
   Serial.print(index + 1);
   Serial.println(" closed");
   
-  // Send callback to backend
   sendServoCallback("closed", index + 1);
 }
 
 void handleAutoCloseServos() {
   for (int i = 0; i < 4; i++) {
     if (servoOpenStates[i]) {
-      // Check if sensor detects vehicle (occupied)
       if (sensorStates[i]) {
-        // Vehicle entered, close gate after delay
         if (millis() - servoOpenTime[i] > SERVO_AUTO_CLOSE_DELAY) {
           Serial.print("Auto-closing gate ");
           Serial.print(i + 1);
@@ -445,59 +513,22 @@ void sendServoCallback(String state, int slotNumber) {
   
   http.POST(payload);
   http.end();
-}
-
-// ==================== BLYNK HANDLERS ====================
-
-// Listen for servo commands from Blynk/Backend
-BLYNK_WRITE(VPIN_SERVO_COMMAND) {
-  String command = param.asString();
-  Serial.print("Blynk command received: ");
-  Serial.println(command);
   
-  // Parse command format: "open:1" or "close:1"
-  int colonIndex = command.indexOf(':');
-  if (colonIndex > 0) {
-    String action = command.substring(0, colonIndex);
-    int slotNumber = command.substring(colonIndex + 1).toInt();
-    
-    if (slotNumber >= 1 && slotNumber <= 4) {
-      if (action == "open") {
-        openServo(slotNumber - 1);
-      } else if (action == "close") {
-        closeServo(slotNumber - 1);
-      }
-    }
-  }
-}
-
-void updateBlynkStatus() {
-  // Update sensor status to Blynk
-  for (int i = 0; i < 4; i++) {
-    String status = sensorStates[i] ? "occupied" : "available";
-    Blynk.virtualWrite(VPIN_SENSOR_SLOT_1 + i, status);
+  // Publish to MQTT
+  if (mqttClient.connected()) {
+    String topic = "parking/servo/" + String(slotNumber) + "/state";
+    mqttClient.publish(topic.c_str(), state.c_str());
+    Serial.print("✓ Published to ");
+    Serial.println(topic);
   }
 }
 
 // ==================== UTILITY FUNCTIONS ====================
 
 void blinkSuccess() {
-  // Can be connected to LED indicator
   Serial.println("✓ Success!");
 }
 
 void blinkError() {
-  // Can be connected to LED indicator
   Serial.println("✗ Error!");
-}
-
-// ==================== CONNECTION CHECK ====================
-
-BLYNK_CONNECTED() {
-  Serial.println("Blynk connected!");
-  updateBlynkStatus();
-}
-
-BLYNK_DISCONNECTED() {
-  Serial.println("Blynk disconnected!");
 }
