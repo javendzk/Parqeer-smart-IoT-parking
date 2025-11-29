@@ -52,12 +52,12 @@
 // MQTT HiveMQ Cloud Configuration
 #define MQTT_BROKER "13b2db0db2624442893404a69ca826a1.s1.eu.hivemq.cloud"
 #define MQTT_PORT 8883
-#define MQTT_USERNAME "YOUR_MQTT_USERNAME"
-#define MQTT_PASSWORD "YOUR_MQTT_PASSWORD"
+#define MQTT_USERNAME "parqeer-service"
+#define MQTT_PASSWORD "parqeer-super-secret"
 
 // Backend API Configuration
-#define BACKEND_URL "http://YOUR_BACKEND_IP:4000"
-#define DEVICE_TOKEN "sample_device_token"
+#define BACKEND_URL "https://parqeer-smart-iot-parking-production.up.railway.app"
+#define DEVICE_TOKEN "parqeer-device-8f2d1c7b4a"
 
 // ==================== HARDWARE PINS ====================
 
