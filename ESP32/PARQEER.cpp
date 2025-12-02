@@ -2,8 +2,8 @@
  * Parqeer Smart IoT Parking System - ESP32 Main Program (MQTT HiveMQ Version)
  * 
  * Features:
- * - 4 IR Sensors for parking slot detection
- * - 4 Servo motors for gate/gate arm control
+ * - 4 IR Sensors for parking slot detection (4 slots)
+ * - 1 Servo motor for entrance gate control
  * - 4x4 Keypad for voucher input
  * - WiFi connectivity to Backend API + MQTT HiveMQ Cloud
  * 
@@ -15,11 +15,8 @@
  *   Slot 3 → GPIO 21
  *   Slot 4 → GPIO 22
  * 
- * Servo Motors (PWM supported pins)
- *   Gate/Slot 1 → GPIO 26
- *   Gate/Slot 2 → GPIO 27
- *   Gate/Slot 3 → GPIO 33
- *   Gate/Slot 4 → GPIO 32
+ * Servo Motor (PWM supported pins)
+ *   Entrance Gate → GPIO 26
  * 
  * Keypad 4x4 (Matrix)
  *   Rows → GPIO 32, 25, 4, 5
@@ -64,8 +61,8 @@
 // IR Sensor Pins (Active LOW - detects obstacle)
 const int irSensorPins[4] = {18, 19, 21, 22};
 
-// Servo Motor Pins
-const int servoPins[4] = {26, 27, 33, 32};
+// Entrance Gate Servo Motor Pin
+const int gateServoPin = 26;
 
 // Servo Positions
 const int SERVO_CLOSED = 90;
@@ -87,7 +84,7 @@ byte colPins[COLS] = {14, 27, 33, 26};
 
 WiFiClientSecure wifiClient;
 PubSubClient mqttClient(wifiClient);
-Servo servos[4];
+Servo gateServo;
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
 // ==================== VARIABLES ====================
@@ -102,8 +99,8 @@ const unsigned long MQTT_RECONNECT_INTERVAL = 5000;
 const unsigned long SERVO_AUTO_CLOSE_DELAY = 5000;
 const int VOUCHER_LENGTH = 6;
 
-bool servoOpenStates[4] = {false, false, false, false};
-unsigned long servoOpenTime[4] = {0, 0, 0, 0};
+bool gateServoOpen = false;
+unsigned long gateServoOpenTime = 0;
 
 // ==================== SETUP ====================
 
@@ -117,12 +114,10 @@ void setup() {
   }
   Serial.println("✓ IR Sensors initialized");
   
-  // Initialize Servos
-  for (int i = 0; i < 4; i++) {
-    servos[i].attach(servoPins[i]);
-    servos[i].write(SERVO_CLOSED);
-  }
-  Serial.println("✓ Servo motors initialized");
+  // Initialize Gate Servo
+  gateServo.attach(gateServoPin);
+  gateServo.write(SERVO_CLOSED);
+  Serial.println("✓ Gate servo initialized");
   
   // Connect to WiFi
   connectWiFi();
@@ -162,8 +157,8 @@ void loop() {
   // Monitor all sensors
   checkAllSensors();
   
-  // Auto-close servos if needed
-  handleAutoCloseServos();
+  // Auto-close gate if needed
+  handleAutoCloseGate();
   
   delay(50);
 }
@@ -253,13 +248,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     }
 
     if (command == "open") {
-      Serial.print("Opening servo for slot ");
+      Serial.print("Opening entrance gate for slot ");
       Serial.println(slotNumber);
-      openServo(slotNumber - 1);
+      openGate();
     } else if (command == "close") {
-      Serial.print("Closing servo for slot ");
+      Serial.print("Closing entrance gate for slot ");
       Serial.println(slotNumber);
-      closeServo(slotNumber - 1);
+      closeGate();
     } else {
       Serial.print("✗ Unknown gate command: ");
       Serial.println(command);
@@ -347,10 +342,10 @@ void validateVoucher(String code) {
         
         if (valid) {
           int slotNumber = responseDoc["slotNumber"];
-          Serial.print("✓ Valid voucher! Opening gate for slot: ");
+          Serial.print("✓ Valid voucher! Opening entrance gate for slot: ");
           Serial.println(slotNumber);
           
-          openServo(slotNumber - 1);
+          openGate();
           
           // Publish to MQTT
           if (mqttClient.connected()) {
@@ -430,11 +425,11 @@ void checkSensor(int index) {
       Serial.println(buffer);
     }
     
-    if (!currentState && servoOpenStates[index]) {
+    if (!currentState && gateServoOpen) {
       Serial.print("Vehicle left slot ");
       Serial.print(index + 1);
       Serial.println(", closing gate...");
-      closeServo(index);
+      closeGate();
     }
   }
 }
@@ -482,49 +477,46 @@ void sendSensorUpdate(int slotNumber, String status) {
 
 // ==================== SERVO CONTROL ====================
 
-void openServo(int index) {
-  if (index < 0 || index >= 4) return;
+void openGate() {
+  gateServo.write(SERVO_OPEN);
+  gateServoOpen = true;
+  gateServoOpenTime = millis();
   
-  servos[index].write(SERVO_OPEN);
-  servoOpenStates[index] = true;
-  servoOpenTime[index] = millis();
+  Serial.println("Entrance gate opened");
   
-  Serial.print("Gate ");
-  Serial.print(index + 1);
-  Serial.println(" opened");
-  
-  sendServoCallback("open", index + 1);
+  sendServoCallback("open");
 }
 
-void closeServo(int index) {
-  if (index < 0 || index >= 4) return;
+void closeGate() {
+  gateServo.write(SERVO_CLOSED);
+  gateServoOpen = false;
   
-  servos[index].write(SERVO_CLOSED);
-  servoOpenStates[index] = false;
+  Serial.println("Entrance gate closed");
   
-  Serial.print("Gate ");
-  Serial.print(index + 1);
-  Serial.println(" closed");
-  
-  sendServoCallback("closed", index + 1);
+  sendServoCallback("closed");
 }
 
-void handleAutoCloseServos() {
-  for (int i = 0; i < 4; i++) {
-    if (servoOpenStates[i]) {
+void handleAutoCloseGate() {
+  if (gateServoOpen) {
+    // Auto-close gate after delay if any vehicle is still detected in any slot
+    bool vehicleDetected = false;
+    for (int i = 0; i < 4; i++) {
       if (sensorStates[i]) {
-        if (millis() - servoOpenTime[i] > SERVO_AUTO_CLOSE_DELAY) {
-          Serial.print("Auto-closing gate ");
-          Serial.print(i + 1);
-          Serial.println(" (vehicle detected)");
-          closeServo(i);
-        }
+        vehicleDetected = true;
+        break;
+      }
+    }
+    
+    if (vehicleDetected) {
+      if (millis() - gateServoOpenTime > SERVO_AUTO_CLOSE_DELAY) {
+        Serial.println("Auto-closing entrance gate (vehicle detected)");
+        closeGate();
       }
     }
   }
 }
 
-void sendServoCallback(String state, int slotNumber) {
+void sendServoCallback(String state) {
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
@@ -538,7 +530,7 @@ void sendServoCallback(String state, int slotNumber) {
   
   StaticJsonDocument<200> doc;
   doc["deviceId"] = "esp32-main";
-  doc["servoState"] = String(state) + ":" + String(slotNumber);
+  doc["servoState"] = state;
   
   String payload;
   serializeJson(doc, payload);
@@ -561,12 +553,11 @@ void sendServoCallback(String state, int slotNumber) {
   
   // Publish to MQTT
   if (mqttClient.connected()) {
-    StaticJsonDocument<200> payload;
-    payload["slotNumber"] = slotNumber;
-    payload["state"] = state;
-    payload["deviceId"] = "esp32-main";
+    StaticJsonDocument<200> gatePayload;
+    gatePayload["state"] = state;
+    gatePayload["deviceId"] = "esp32-main";
     char buffer[128];
-    serializeJson(payload, buffer, sizeof(buffer));
+    serializeJson(gatePayload, buffer, sizeof(buffer));
     const char* topic = "parking/gate/state";
     mqttClient.publish(topic, buffer);
     Serial.print("✓ Published to ");
