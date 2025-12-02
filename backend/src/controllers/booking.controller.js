@@ -56,11 +56,13 @@ const createBooking = async (req, res, next) => {
     const transactionRow = transaction.rows[0];
     const paymentUrl = buildPaymentUrl(transactionRow.paymenttoken || paymentToken);
 
+    const expiresAt = voucher.expiresAt || voucher.expiresat || null;
+
     res.status(201).json({
       voucherCode: voucher.code,
       transactionId: transactionRow.id,
       paymentToken: transactionRow.paymenttoken || paymentToken,
-      expiresAt: voucher.expiresAt,
+      expiresAt,
       paymentUrl
     });
   } catch (error) {

@@ -62,6 +62,7 @@ const Booking = () => {
     setActiveSlotNumber(slot.slotNumber);
     try {
       await reserveSlot(slot.slotNumber);
+      await loadSlots();
     } catch (err) {
       // error already captured in state
     } finally {

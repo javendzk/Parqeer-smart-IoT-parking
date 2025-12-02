@@ -5,38 +5,55 @@ import QRCode from 'react-qr-code';
 const VoucherModal = ({ details, onClose, onExpired }) => {
   const navigate = useNavigate();
   if (!details) return null;
-  const [remaining, setRemaining] = useState(0);
+  const [remaining, setRemaining] = useState(null);
   const [notifiedExpiry, setNotifiedExpiry] = useState(false);
+  const fallbackExpiryMs = useMemo(() => {
+    if (!details) return null;
+    if (details.expiresAt) {
+      return new Date(details.expiresAt).getTime();
+    }
+    if (details.expires_at) {
+      return new Date(details.expires_at).getTime();
+    }
+    if (details.createdAt) {
+      return new Date(details.createdAt).getTime() + 5 * 60 * 1000;
+    }
+    if (details.created_at) {
+      return new Date(details.created_at).getTime() + 5 * 60 * 1000;
+    }
+    return Date.now() + 5 * 60 * 1000;
+  }, [details]);
   useEffect(() => {
     setNotifiedExpiry(false);
-    if (!details?.expiresAt) {
-      setRemaining(0);
+    if (!fallbackExpiryMs) {
+      setRemaining(null);
       return undefined;
     }
-    const target = new Date(details.expiresAt).getTime();
+    const target = fallbackExpiryMs;
     const update = () => {
       setRemaining(Math.max(0, target - Date.now()));
     };
     update();
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
-  }, [details?.expiresAt]);
+  }, [fallbackExpiryMs]);
 
   useEffect(() => {
-    if (remaining === 0 && details && !notifiedExpiry) {
+    if (fallbackExpiryMs && remaining === 0 && remaining !== null && !notifiedExpiry) {
       setNotifiedExpiry(true);
       onExpired?.();
     }
-  }, [remaining, details, notifiedExpiry, onExpired]);
+  }, [remaining, fallbackExpiryMs, notifiedExpiry, onExpired]);
 
   const countdownText = useMemo(() => {
+    if (remaining === null) return '--:--';
     const totalSeconds = Math.max(0, Math.floor(remaining / 1000));
     const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
     const seconds = String(totalSeconds % 60).padStart(2, '0');
     return `${minutes}:${seconds}`;
   }, [remaining]);
 
-  const expired = remaining === 0;
+  const expired = fallbackExpiryMs ? remaining === 0 && remaining !== null : false;
   const paymentUrl = `${window.location.origin.replace(/\/$/, '')}/payment/${details.paymentToken || details.transactionId}`;
   const handleCopyPaymentLink = () => {
     if (navigator?.clipboard) {
