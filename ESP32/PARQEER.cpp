@@ -5,6 +5,8 @@
  * - 4 IR Sensors for parking slot detection (4 slots)
  * - 1 Servo motor for entrance gate control
  * - 4x4 Keypad for voucher input
+ * - 1 LED Indicator for reserved slot tracking
+ * - 1 Buzzer for wrong slot detection
  * - WiFi connectivity to Backend API + MQTT HiveMQ Cloud
  * 
  * Hardware Pinout (Final - Safe for ESP32):
@@ -18,9 +20,33 @@
  * Servo Motor (PWM supported pins)
  *   Entrance Gate → GPIO 26
  * 
+ * LED Indicator Pin
+ *   Indicator LED → GPIO 2 (lights up when voucher valid, turns off when vehicle arrives at correct slot)
+ * 
+ * Buzzer Pin
+ *   Buzzer → GPIO 4 (beeps when vehicle enters wrong slot)
+ * 
  * Keypad 4x4 (Matrix)
  *   Rows → GPIO 32, 25, 4, 5
  *   Cols → GPIO 14, 27, 33, 26
+ * 
+ * LED Logic:
+ * - LED ON: Immediately when voucher is validated (vehicle should be entering)
+ * - LED OFF: Automatically turns off when reserved slot sensor detects vehicle (occupied)
+ * - LED Log: Every LED state change is logged with timestamp and reason
+ * - MQTT: LED events published to "parking/led/log" topic for backend tracking
+ * 
+ * Buzzer Logic:
+ * - BUZZER ON: When vehicle sensor detects occupancy in a slot OTHER than reserved slot
+ * - BUZZER OFF: When vehicle enters the CORRECT reserved slot
+ * - BUZZER PAUSED: When vehicle leaves wrong slot (buzzer stays on, waiting for correct slot)
+ * - MQTT: Buzzer events published to "parking/buzzer/log" topic for backend tracking
+ * 
+ * Example Scenario:
+ * 1. User reserves Slot 2 → Voucher validated → Gate opens → LED ON
+ * 2. Vehicle enters Slot 3 instead → Sensor detects → BUZZER ON
+ * 3. Vehicle leaves Slot 3 → BUZZER stays ON (paused state)
+ * 4. Vehicle enters Slot 2 → Sensor detects → LED OFF, BUZZER OFF, Gate closes
  * 
  * Notes:
  * - All GND must be COMMON Ground
@@ -67,6 +93,9 @@ const int gateServoPin = 26;
 // Wrong-slot indicator LED Pin
 const int indicatorLedPin = 2;
 
+// Buzzer Pin
+const int buzzerPin = 34;
+
 // Servo Positions
 const int SERVO_CLOSED = 90;
 const int SERVO_OPEN = 0;
@@ -106,6 +135,15 @@ bool gateServoOpen = false;
 unsigned long gateServoOpenTime = 0;
 bool indicatorLedOn = false;
 
+// LED Tracking variables
+int reservedSlotNumber = -1;           // -1 = tidak ada slot reserved
+unsigned long ledTurnedOnTime = 0;     // Waktu LED dinyalakan
+bool ledActiveForReservedSlot = false; // Apakah LED sedang aktif untuk slot reserved
+
+// Buzzer Tracking variables
+bool buzzerActive = false;             // Apakah buzzer sedang aktif
+unsigned long buzzerActivationTime = 0; // Waktu buzzer dinyalakan
+
 // ==================== SETUP ====================
 
 void setup() {
@@ -126,6 +164,12 @@ void setup() {
   pinMode(indicatorLedPin, OUTPUT);
   digitalWrite(indicatorLedPin, LOW);
   indicatorLedOn = false;
+  
+  // Initialize Buzzer
+  pinMode(buzzerPin, OUTPUT);
+  digitalWrite(buzzerPin, LOW);
+  buzzerActive = false;
+  Serial.println("✓ Buzzer initialized");
   
   // Connect to WiFi
   connectWiFi();
@@ -373,6 +417,16 @@ void validateVoucher(String code) {
           Serial.print("✓ Valid voucher! Opening entrance gate for slot: ");
           Serial.println(slotNumber);
           
+          // Track reserved slot for LED indicator
+          reservedSlotNumber = slotNumber;
+          ledActiveForReservedSlot = true;
+          ledTurnedOnTime = millis();
+          
+          // Turn ON indicator LED
+          digitalWrite(indicatorLedPin, HIGH);
+          indicatorLedOn = true;
+          logLedEvent("ON", slotNumber, "Voucher validated for slot");
+          
           openGate();
           
           // Publish to MQTT
@@ -436,6 +490,49 @@ void checkSensor(int index) {
     Serial.println(status);
     
     sendSensorUpdate(index + 1, status);
+    
+    // Check if this is the reserved slot and it's now occupied
+    if (ledActiveForReservedSlot && (index + 1) == reservedSlotNumber && currentState) {
+      Serial.print("✓ Vehicle arrived at reserved slot ");
+      Serial.println(reservedSlotNumber);
+      logLedEvent("OFF", reservedSlotNumber, "Vehicle detected at reserved slot");
+      
+      // Turn OFF indicator LED
+      digitalWrite(indicatorLedPin, LOW);
+      indicatorLedOn = false;
+      ledActiveForReservedSlot = false;
+      
+      // Turn OFF buzzer if active
+      if (buzzerActive) {
+        digitalWrite(buzzerPin, LOW);
+        buzzerActive = false;
+        logBuzzerEvent("OFF", reservedSlotNumber, "Correct slot detected - buzzer stopped");
+      }
+      
+      reservedSlotNumber = -1;
+    }
+    // Check if vehicle entered WRONG slot
+    else if (ledActiveForReservedSlot && (index + 1) != reservedSlotNumber && currentState) {
+      Serial.print("✗ Vehicle entered WRONG slot! Reserved: ");
+      Serial.print(reservedSlotNumber);
+      Serial.print(", Actual: ");
+      Serial.println(index + 1);
+      
+      // Activate buzzer
+      if (!buzzerActive) {
+        digitalWrite(buzzerPin, HIGH);
+        buzzerActive = true;
+        buzzerActivationTime = millis();
+        logBuzzerEvent("ON", index + 1, "Wrong slot detected - vehicle should go to slot " + String(reservedSlotNumber));
+      }
+    }
+    // Check if vehicle LEFT wrong slot
+    else if (ledActiveForReservedSlot && buzzerActive && (index + 1) != reservedSlotNumber && !currentState) {
+      Serial.print("Vehicle left wrong slot ");
+      Serial.println(index + 1);
+      logBuzzerEvent("PAUSED", index + 1, "Vehicle left wrong slot - waiting for correct slot");
+      // Buzzer remains ON but we log this event
+    }
     
     // Publish to MQTT
     if (mqttClient.connected()) {
@@ -583,6 +680,88 @@ void sendServoCallback(String state) {
 }
 
 // ==================== UTILITY FUNCTIONS ====================
+
+void logLedEvent(String state, int slotNumber, String reason) {
+  // Log format: [HH:MM:SS] LED [ON/OFF] - Slot: X - Reason: ...
+  unsigned long uptime = millis() / 1000;
+  unsigned int hours = (uptime / 3600) % 24;
+  unsigned int minutes = (uptime / 60) % 60;
+  unsigned int seconds = uptime % 60;
+  
+  Serial.print("[");
+  if (hours < 10) Serial.print("0");
+  Serial.print(hours);
+  Serial.print(":");
+  if (minutes < 10) Serial.print("0");
+  Serial.print(minutes);
+  Serial.print(":");
+  if (seconds < 10) Serial.print("0");
+  Serial.print(seconds);
+  Serial.print("] ");
+  Serial.print("LED [");
+  Serial.print(state);
+  Serial.print("] - Slot: ");
+  Serial.print(slotNumber);
+  Serial.print(" - Reason: ");
+  Serial.println(reason);
+  
+  // Optional: Send LED log to backend via MQTT
+  if (mqttClient.connected()) {
+    StaticJsonDocument<256> logPayload;
+    logPayload["timestamp"] = uptime;
+    logPayload["ledState"] = state;
+    logPayload["slotNumber"] = slotNumber;
+    logPayload["reason"] = reason;
+    logPayload["deviceId"] = "esp32-main";
+    
+    char buffer[256];
+    serializeJson(logPayload, buffer, sizeof(buffer));
+    
+    const char* topic = "parking/led/log";
+    mqttClient.publish(topic, buffer);
+  }
+}
+
+void logBuzzerEvent(String state, int slotNumber, String reason) {
+  // Log format: [HH:MM:SS] BUZZER [ON/OFF/PAUSED] - Slot: X - Reason: ...
+  unsigned long uptime = millis() / 1000;
+  unsigned int hours = (uptime / 3600) % 24;
+  unsigned int minutes = (uptime / 60) % 60;
+  unsigned int seconds = uptime % 60;
+  
+  Serial.print("[");
+  if (hours < 10) Serial.print("0");
+  Serial.print(hours);
+  Serial.print(":");
+  if (minutes < 10) Serial.print("0");
+  Serial.print(minutes);
+  Serial.print(":");
+  if (seconds < 10) Serial.print("0");
+  Serial.print(seconds);
+  Serial.print("] ");
+  Serial.print("🔔 BUZZER [");
+  Serial.print(state);
+  Serial.print("] - Slot: ");
+  Serial.print(slotNumber);
+  Serial.print(" - Reason: ");
+  Serial.println(reason);
+  
+  // Send buzzer log to backend via MQTT
+  if (mqttClient.connected()) {
+    StaticJsonDocument<256> logPayload;
+    logPayload["timestamp"] = uptime;
+    logPayload["buzzerState"] = state;
+    logPayload["slotNumber"] = slotNumber;
+    logPayload["reason"] = reason;
+    logPayload["deviceId"] = "esp32-main";
+    
+    char buffer[256];
+    serializeJson(logPayload, buffer, sizeof(buffer));
+    
+    const char* topic = "parking/buzzer/log";
+    mqttClient.publish(topic, buffer);
+  }
+}
 
 void blinkSuccess() {
   Serial.println("✓ Success!");
