@@ -4,6 +4,8 @@ const dotenv = require('dotenv');
 const app = require('./app');
 const { logger } = require('./utils/logger');
 const { initMqttBridge } = require('./services/mqttBridge.service');
+const { startReservationWatcher } = require('./services/reservationWatcher.service');
+const { cancelActiveGateSessions } = require('./services/gateSession.service');
 
 dotenv.config();
 
@@ -17,6 +19,8 @@ const io = new Server(server, {
 
 app.set('io', io);
 initMqttBridge(app);
+cancelActiveGateSessions().catch((error) => logger.error('Failed to reset gate sessions', { error: error.message }));
+startReservationWatcher(app);
 
 io.on('connection', (socket) => {
   logger.info('Socket connected', { id: socket.id });

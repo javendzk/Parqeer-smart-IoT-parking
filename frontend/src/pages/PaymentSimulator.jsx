@@ -13,6 +13,7 @@ const PaymentSimulator = () => {
   const [showPrompt, setShowPrompt] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [modalMessage, setModalMessage] = useState('');
+  const [countdownText, setCountdownText] = useState('');
   const appUrl = useMemo(() => (import.meta.env.VITE_PUBLIC_APP_URL || window.location.origin).replace(/\/$/, ''), []);
 
   const loadTransaction = async () => {
@@ -45,6 +46,24 @@ const PaymentSimulator = () => {
     loadTransaction();
   }, [paymentToken]);
 
+  useEffect(() => {
+    if (!transaction?.expiresAt || transaction.status !== 'pending') {
+      setCountdownText('');
+      return undefined;
+    }
+    const target = new Date(transaction.expiresAt).getTime();
+    const update = () => {
+      const remaining = Math.max(0, target - Date.now());
+      const totalSeconds = Math.floor(remaining / 1000);
+      const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+      const seconds = String(totalSeconds % 60).padStart(2, '0');
+      setCountdownText(`${minutes}:${seconds}`);
+    };
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [transaction?.expiresAt, transaction?.status]);
+
   const handlePay = async () => {
     setPaying(true);
     setStatusMessage('');
@@ -52,6 +71,12 @@ const PaymentSimulator = () => {
     try {
       if (!transaction?.id) {
         throw new Error('Transaction not loaded');
+      }
+      if (
+        transaction.status === 'expired' ||
+        (transaction.status === 'pending' && transaction.expiresAt && new Date(transaction.expiresAt).getTime() <= Date.now())
+      ) {
+        throw new Error('Reservation expired');
       }
       await payTransaction(transaction.id);
       setStatusMessage('Payment successful. Voucher confirmed.');
@@ -68,7 +93,7 @@ const PaymentSimulator = () => {
   };
 
   const openPrompt = () => {
-    if (transaction?.status === 'paid') return;
+    if (transaction?.status === 'paid' || transaction?.status === 'expired') return;
     setPaymentSuccess(false);
     setModalMessage('');
     setShowPrompt(true);
@@ -83,6 +108,8 @@ const PaymentSimulator = () => {
 
   const paymentUrl = transaction ? transaction.paymentUrl || `${appUrl}/payment/${transaction.paymentToken || paymentToken}` : '';
   const voucherUnlocked = transaction?.status === 'paid';
+  const pendingExpired = transaction?.status === 'pending' && countdownText === '00:00';
+  const isExpired = transaction?.status === 'expired' || pendingExpired;
 
   if (loading) {
     return <p className="text-center text-slate-500">Loading transaction...</p>;
@@ -112,11 +139,22 @@ const PaymentSimulator = () => {
         </div>
         <div className="rounded-2xl border border-slate-200 p-4">
           <p className="text-sm text-slate-500">Status</p>
-          <p className="text-xl font-semibold text-slate-900">{transaction.status}</p>
+          <p className={`text-xl font-semibold ${isExpired ? 'text-rose-600' : 'text-slate-900'}`}>{transaction.status}</p>
         </div>
         <div className="rounded-2xl border border-slate-200 p-4">
           <p className="text-sm text-slate-500">Last update</p>
           <p className="text-xl font-semibold text-slate-900">{dayjs(transaction.updatedAt).format('DD MMM HH:mm')}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 p-4">
+          <p className="text-sm text-slate-500">Bayar sebelum</p>
+          {transaction.expiresAt ? (
+            <>
+              <p className={`text-xl font-semibold ${isExpired ? 'text-rose-600' : 'text-slate-900'}`}>{dayjs(transaction.expiresAt).format('HH:mm:ss')}</p>
+              {transaction.status === 'pending' && countdownText && <p className="text-sm text-slate-500">Countdown: {countdownText}</p>}
+            </>
+          ) : (
+            <p className="text-sm text-slate-500">Tidak tersedia</p>
+          )}
         </div>
       </div>
       <div className="mt-6 grid gap-4 lg:grid-cols-[240px,1fr]">
@@ -137,8 +175,13 @@ const PaymentSimulator = () => {
         </div>
       </div>
       {statusMessage && <p className="mt-4 text-center text-brand-secondary">{statusMessage}</p>}
-      <button type="button" className="btn-primary mt-8 w-full py-4 text-xl" onClick={openPrompt} disabled={transaction.status === 'paid'}>
-        {transaction.status === 'paid' ? 'Payment complete' : 'Bayar Sekarang'}
+      <button
+        type="button"
+        className="btn-primary mt-8 w-full py-4 text-xl"
+        onClick={openPrompt}
+        disabled={transaction.status === 'paid' || isExpired}
+      >
+        {transaction.status === 'paid' ? 'Payment complete' : isExpired ? 'Reservation expired' : 'Bayar Sekarang'}
       </button>
       {showPrompt && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 px-4">

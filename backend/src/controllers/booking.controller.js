@@ -7,7 +7,7 @@ const { buildPaymentUrl, createPaymentToken } = require('../utils/url');
 
 dotenv.config();
 
-const ttlMinutes = parseInt(process.env.VOUCHER_TTL_MINUTES || '15', 10);
+const ttlMinutes = parseInt(process.env.VOUCHER_TTL_MINUTES || '5', 10);
 
 const getSlots = async (req, res, next) => {
   try {

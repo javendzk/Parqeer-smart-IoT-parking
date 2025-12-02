@@ -1,6 +1,8 @@
 const dotenv = require('dotenv');
 const { query } = require('../config/db');
 const { getVoucherByCode, markVoucherUsed } = require('../services/voucher.service');
+const { getActiveGateSession, createGateSession } = require('../services/gateSession.service');
+const { processGateSensorEvent } = require('../services/gateManager.service');
 const {
   pushSlotCounts,
   sendGateCommand,
@@ -32,6 +34,11 @@ const validateVoucher = async (req, res, next) => {
       return res.status(401).json({ message: 'Unauthorized device' });
     }
     const { code, deviceId } = req.body;
+    const activeSession = await getActiveGateSession();
+    if (activeSession) {
+      return res.status(409).json({ valid: false, message: 'Gate is currently in use' });
+    }
+
     const voucher = await getVoucherByCode(code);
     if (!voucher) {
       await publishVoucherResponse({ code, valid: false, message: 'Voucher not found' });
@@ -45,16 +52,16 @@ const validateVoucher = async (req, res, next) => {
       await publishVoucherResponse({ code, valid: false, message: 'Voucher expired' });
       return res.status(400).json({ valid: false, message: 'Voucher expired' });
     }
+    const transactionResult = await query('SELECT status FROM transactions WHERE voucherId = $1', [voucher.id]);
+    const transaction = transactionResult.rows[0];
+    if (!transaction || transaction.status !== 'paid') {
+      await publishVoucherResponse({ code, valid: false, message: 'Voucher not paid' });
+      return res.status(400).json({ valid: false, message: 'Voucher not paid' });
+    }
     await markVoucherUsed(voucher.id);
-    await query("UPDATE slots SET status = 'occupied', updatedAt = now() WHERE id = $1", [voucher.slotId]);
-    await pushSlotCounts();
+    await createGateSession({ voucherId: voucher.id, slotId: voucher.slotId, slotNumber: voucher.slotNumber });
     await sendGateCommand(voucher.slotNumber, 'open');
     await publishVoucherResponse({ code, valid: true, slotNumber: voucher.slotNumber, action: 'open' });
-    const io = req.app.get('io');
-    if (io) {
-      io.emit('servoOpen', { slotNumber: voucher.slotNumber });
-      io.emit('slotUpdate', { slotNumber: voucher.slotNumber, status: 'occupied' });
-    }
     await logDeviceEvent(deviceId || 'esp32', 'voucher-validated', { code, slotNumber: voucher.slotNumber });
     res.json({ valid: true, slotNumber: voucher.slotNumber, action: 'open' });
   } catch (error) {
@@ -80,6 +87,7 @@ const handleSensorUpdate = async (req, res, next) => {
     await logDeviceEvent(deviceId || 'esp32', 'sensor-update', { slotNumber, sensorIndex, value });
     await announceSensorStatus(slotNumber, nextStatus);
     await pushSlotCounts();
+    await processGateSensorEvent(slotNumber, nextStatus, req.app);
     const io = req.app.get('io');
     if (io) {
       io.emit('slotUpdate', { slotNumber, status: nextStatus });

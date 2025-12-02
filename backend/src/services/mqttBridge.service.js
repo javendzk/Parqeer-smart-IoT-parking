@@ -1,6 +1,8 @@
 const { publish, subscribe } = require('../config/mqtt');
 const { query } = require('../config/db');
 const { getVoucherByCode, markVoucherUsed } = require('./voucher.service');
+const { processGateSensorEvent } = require('./gateManager.service');
+const { getActiveGateSession, createGateSession } = require('./gateSession.service');
 const { logger } = require('../utils/logger');
 
 const logDeviceEvent = async (deviceId, type, payload) => {
@@ -13,6 +15,7 @@ const logDeviceEvent = async (deviceId, type, payload) => {
 
 const publishSystemNotify = (payload) => publish('parking/system/notify', payload);
 const publishVoucherResponse = (payload) => publish('parking/voucher/validateResponse', payload);
+const sendBuzzerCommand = (state, meta = {}) => publish('parking/buzzer/state', { state, ...meta });
 
 const sendGateCommand = (slotNumber, command) => {
   const topic = command === 'open' ? 'parking/gate/open' : 'parking/gate/close';
@@ -43,6 +46,12 @@ const announceSensorStatus = async (slotNumber, status) => {
 const handleVoucherCheck = async (payload, app) => {
   const { code, deviceId } = payload || {};
   if (!code) return;
+  const activeSession = await getActiveGateSession();
+  if (activeSession) {
+    await publishVoucherResponse({ code, valid: false, message: 'Gate is currently in use' });
+    return;
+  }
+
   const voucher = await getVoucherByCode(code);
   if (!voucher) {
     await publishVoucherResponse({ code, valid: false, message: 'Voucher not found' });
@@ -56,16 +65,16 @@ const handleVoucherCheck = async (payload, app) => {
     await publishVoucherResponse({ code, valid: false, message: 'Voucher expired' });
     return;
   }
+  const transactionResult = await query('SELECT status FROM transactions WHERE voucherId = $1', [voucher.id]);
+  const transaction = transactionResult.rows[0];
+  if (!transaction || transaction.status !== 'paid') {
+    await publishVoucherResponse({ code, valid: false, message: 'Voucher not paid' });
+    return;
+  }
   await markVoucherUsed(voucher.id);
-  await query("UPDATE slots SET status = 'occupied', updatedAt = now() WHERE id = $1", [voucher.slotId]);
-  await pushSlotCounts();
+  await createGateSession({ voucherId: voucher.id, slotId: voucher.slotId, slotNumber: voucher.slotNumber });
   await sendGateCommand(voucher.slotNumber, 'open');
   await publishVoucherResponse({ code, valid: true, slotNumber: voucher.slotNumber, action: 'open' });
-  const io = app.get('io');
-  if (io) {
-    io.emit('servoOpen', { slotNumber: voucher.slotNumber });
-    io.emit('slotUpdate', { slotNumber: voucher.slotNumber, status: 'occupied' });
-  }
   await logDeviceEvent(deviceId || 'esp32', 'voucher-validated-mqtt', { code, slotNumber: voucher.slotNumber });
 };
 
@@ -83,6 +92,7 @@ const handleSlotStatus = async (topic, payload, app) => {
     await pushSlotCounts();
   }
   await announceSensorStatus(slotNumber, nextStatus);
+  await processGateSensorEvent(slotNumber, nextStatus, app);
   const io = app.get('io');
   if (io) {
     io.emit('slotUpdate', { slotNumber, status: nextStatus });
@@ -113,6 +123,7 @@ module.exports = {
   pushSlotCounts,
   announceVoucher,
   sendGateCommand,
+  sendBuzzerCommand,
   announceSensorStatus,
   publishVoucherResponse,
   publishSystemNotify,

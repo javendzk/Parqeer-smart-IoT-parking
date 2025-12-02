@@ -39,6 +39,12 @@ const payTransaction = async (req, res, next) => {
     if (transaction.status !== 'pending') {
       return res.status(400).json({ message: 'Transaction already processed' });
     }
+    if (transaction.voucherStatus === 'expired' || (transaction.expiresAt && new Date(transaction.expiresAt) < new Date())) {
+      await query("UPDATE transactions SET status = 'expired', updatedAt = now() WHERE id = $1", [transaction.id]);
+      await query("UPDATE vouchers SET status = 'expired', updatedAt = now() WHERE id = $1", [transaction.voucherid || transaction.voucherId]);
+      await query("UPDATE slots SET status = 'available', updatedAt = now() WHERE id = $1", [transaction.voucherSlotId]);
+      return res.status(400).json({ message: 'Reservation expired' });
+    }
     await markTransactionPaid(transactionId);
     await query("UPDATE slots SET status = 'reserved', updatedAt = now() WHERE id = $1", [transaction.voucherSlotId]);
     await pushSlotCounts();

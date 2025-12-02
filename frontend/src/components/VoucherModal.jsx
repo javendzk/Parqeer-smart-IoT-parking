@@ -1,9 +1,42 @@
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QRCode from 'react-qr-code';
 
-const VoucherModal = ({ details, onClose }) => {
+const VoucherModal = ({ details, onClose, onExpired }) => {
   const navigate = useNavigate();
   if (!details) return null;
+  const [remaining, setRemaining] = useState(0);
+  const [notifiedExpiry, setNotifiedExpiry] = useState(false);
+  useEffect(() => {
+    setNotifiedExpiry(false);
+    if (!details?.expiresAt) {
+      setRemaining(0);
+      return undefined;
+    }
+    const target = new Date(details.expiresAt).getTime();
+    const update = () => {
+      setRemaining(Math.max(0, target - Date.now()));
+    };
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [details?.expiresAt]);
+
+  useEffect(() => {
+    if (remaining === 0 && details && !notifiedExpiry) {
+      setNotifiedExpiry(true);
+      onExpired?.();
+    }
+  }, [remaining, details, notifiedExpiry, onExpired]);
+
+  const countdownText = useMemo(() => {
+    const totalSeconds = Math.max(0, Math.floor(remaining / 1000));
+    const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+    const seconds = String(totalSeconds % 60).padStart(2, '0');
+    return `${minutes}:${seconds}`;
+  }, [remaining]);
+
+  const expired = remaining === 0;
   const paymentUrl = `${window.location.origin.replace(/\/$/, '')}/payment/${details.paymentToken || details.transactionId}`;
   const handleCopyPaymentLink = () => {
     if (navigator?.clipboard) {
@@ -11,6 +44,7 @@ const VoucherModal = ({ details, onClose }) => {
     }
   };
   const handlePayment = () => {
+    if (expired) return;
     const tokenOrId = details.paymentToken || details.transactionId;
     if (!tokenOrId) return;
     navigate(`/payment/${tokenOrId}`);
@@ -23,7 +57,11 @@ const VoucherModal = ({ details, onClose }) => {
           <h3 className="text-lg font-semibold text-slate-900">Pembayaran Diperlukan</h3>
           <button type="button" onClick={onClose} className="text-slate-500 hover:text-slate-800">×</button>
         </div>
-        <p className="mt-2 text-sm text-slate-500">Selesaikan pembayaran untuk menerima voucher unik. Voucher akan tampil otomatis setelah transaksi berhasil.</p>
+        <p className="mt-2 text-sm text-slate-500">Selesaikan pembayaran dalam 5 menit untuk menerima voucher unik. Voucher akan tampil otomatis setelah transaksi berhasil.</p>
+        <div className="mt-4 flex items-center justify-between rounded-xl bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-700">
+          <span>Waktu tersisa</span>
+          <span className={expired ? 'text-rose-600' : 'text-emerald-600'}>{countdownText}</span>
+        </div>
         <div className="mt-6 flex flex-col items-center gap-4 rounded-xl border border-slate-200 bg-white p-5 text-center">
           <p className="text-xs uppercase tracking-widest text-slate-500">Scan untuk Bayar</p>
           <div className="rounded-2xl bg-white p-3 shadow-inner">
@@ -32,7 +70,9 @@ const VoucherModal = ({ details, onClose }) => {
           <p className="text-sm text-slate-500">Link: <button type="button" className="text-brand-secondary underline" onClick={handleCopyPaymentLink}>Salin</button></p>
         </div>
         <div className="mt-6 space-y-3">
-          <button type="button" className="btn-primary w-full" onClick={handlePayment}>Bayar Sekarang</button>
+          <button type="button" className="btn-primary w-full" onClick={handlePayment} disabled={expired}>
+            {expired ? 'Reservasi Kadaluarsa' : 'Bayar Sekarang'}
+          </button>
           <p className="text-center text-xs text-slate-400">Voucher baru akan tersedia setelah pembayaran sukses.</p>
         </div>
       </div>

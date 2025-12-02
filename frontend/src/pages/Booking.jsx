@@ -79,6 +79,14 @@ const Booking = () => {
     }
   };
 
+  const handleReservationExpired = () => {
+    setVoucherDetails(null);
+    setSelectedSlot(null);
+    setManualSlot('');
+    setError('Reservasi kadaluarsa. Silakan pilih slot lagi.');
+    loadSlots();
+  };
+
   return (
     <section className="space-y-8">
       <div className="bg-glass rounded-3xl p-8 shadow-lg">
@@ -141,7 +149,13 @@ const Booking = () => {
           </div>
         </form>
       </div>
-      {voucherDetails && <VoucherModal details={voucherDetails} onClose={() => setVoucherDetails(null)} />}
+      {voucherDetails && (
+        <VoucherModal
+          details={voucherDetails}
+          onClose={() => setVoucherDetails(null)}
+          onExpired={handleReservationExpired}
+        />
+      )}
     </section>
   );
 };
