@@ -1,11 +1,13 @@
 const dotenv = require('dotenv');
 const { query } = require('../config/db');
-const { pushSlotCounts } = require('./mqttBridge.service');
+const { pushSlotCounts, sendGateCommand } = require('./mqttBridge.service');
+const { expireStaleGateSessions } = require('./gateSession.service');
 const { logger } = require('../utils/logger');
 
 dotenv.config();
 
 const sweepIntervalMs = parseInt(process.env.RESERVATION_SWEEP_INTERVAL_MS || '30000', 10);
+const gateSessionTimeoutMinutes = parseInt(process.env.GATE_SESSION_TIMEOUT_MINUTES || '2', 10);
 
 const releaseExpiredReservations = async (app) => {
   const expired = await query(
@@ -72,9 +74,22 @@ const releaseExpiredReservations = async (app) => {
 };
 
 const startReservationWatcher = (app) => {
-  releaseExpiredReservations(app).catch((error) => logger.error('Initial reservation sweep failed', { error: error.message }));
+  const runSweep = async () => {
+    await releaseExpiredReservations(app);
+    const timedOut = await expireStaleGateSessions(gateSessionTimeoutMinutes);
+    if (timedOut.length) {
+      await Promise.all(timedOut.map((session) => sendGateCommand(session.slotNumber, 'close')));
+      const io = app.get('io');
+      if (io) {
+        timedOut.forEach((session) => io.emit('gateSessionTimeout', { slotNumber: session.slotNumber }));
+      }
+      logger.warn('Expired gate sessions', { count: timedOut.length });
+    }
+  };
+
+  runSweep().catch((error) => logger.error('Initial reservation sweep failed', { error: error.message }));
   setInterval(() => {
-    releaseExpiredReservations(app).catch((error) => logger.error('Reservation sweep failed', { error: error.message }));
+    runSweep().catch((error) => logger.error('Reservation sweep failed', { error: error.message }));
   }, sweepIntervalMs);
 };
 

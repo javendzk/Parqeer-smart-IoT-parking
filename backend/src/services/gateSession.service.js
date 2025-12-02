@@ -52,10 +52,22 @@ const setGateSessionBuzzerState = async (sessionId, state) => {
   return result.rows[0];
 };
 
+const expireStaleGateSessions = async (maxAgeMinutes = 2) => {
+  const result = await query(
+    `UPDATE gate_sessions
+     SET status = 'timeout', updatedAt = now(), completedAt = now(), buzzerActive = FALSE
+     WHERE status = 'entering' AND createdAt < now() - $1::interval
+     RETURNING *`,
+    [`${maxAgeMinutes} minutes`]
+  );
+  return result.rows;
+};
+
 module.exports = {
   getActiveGateSession,
   createGateSession,
   completeGateSession,
   cancelActiveGateSessions,
-  setGateSessionBuzzerState
+  setGateSessionBuzzerState,
+  expireStaleGateSessions
 };

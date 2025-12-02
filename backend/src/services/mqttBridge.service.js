@@ -15,7 +15,7 @@ const logDeviceEvent = async (deviceId, type, payload) => {
 
 const publishSystemNotify = (payload) => publish('parking/system/notify', payload);
 const publishVoucherResponse = (payload) => publish('parking/voucher/validateResponse', payload);
-const sendBuzzerCommand = (state, meta = {}) => publish('parking/buzzer/state', { state, ...meta });
+const sendIndicatorCommand = (state, meta = {}) => publish('parking/indicator/wrong-slot', { state, ...meta });
 
 const sendGateCommand = (slotNumber, command) => {
   const topic = command === 'open' ? 'parking/gate/open' : 'parking/gate/close';
@@ -123,7 +123,7 @@ module.exports = {
   pushSlotCounts,
   announceVoucher,
   sendGateCommand,
-  sendBuzzerCommand,
+  sendIndicatorCommand,
   announceSensorStatus,
   publishVoucherResponse,
   publishSystemNotify,

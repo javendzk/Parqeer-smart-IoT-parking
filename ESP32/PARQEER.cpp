@@ -64,6 +64,9 @@ const int irSensorPins[4] = {18, 19, 21, 22};
 // Entrance Gate Servo Motor Pin
 const int gateServoPin = 26;
 
+// Wrong-slot indicator LED Pin
+const int indicatorLedPin = 2;
+
 // Servo Positions
 const int SERVO_CLOSED = 90;
 const int SERVO_OPEN = 0;
@@ -101,6 +104,7 @@ const int VOUCHER_LENGTH = 6;
 
 bool gateServoOpen = false;
 unsigned long gateServoOpenTime = 0;
+bool indicatorLedOn = false;
 
 // ==================== SETUP ====================
 
@@ -118,6 +122,10 @@ void setup() {
   gateServo.attach(gateServoPin);
   gateServo.write(SERVO_CLOSED);
   Serial.println("✓ Gate servo initialized");
+
+  pinMode(indicatorLedPin, OUTPUT);
+  digitalWrite(indicatorLedPin, LOW);
+  indicatorLedOn = false;
   
   // Connect to WiFi
   connectWiFi();
@@ -205,8 +213,10 @@ void reconnectMQTT() {
     
     mqttClient.subscribe("parking/gate/open");
     mqttClient.subscribe("parking/gate/close");
+    mqttClient.subscribe("parking/indicator/wrong-slot");
     Serial.println("✓ Subscribed to: parking/gate/open");
     Serial.println("✓ Subscribed to: parking/gate/close");
+    Serial.println("✓ Subscribed to: parking/indicator/wrong-slot");
   } else {
     Serial.print("✗ MQTT connection failed, rc=");
     Serial.println(mqttClient.state());
@@ -229,6 +239,24 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String topicStr = String(topic);
   bool isOpenTopic = topicStr == "parking/gate/open";
   bool isCloseTopic = topicStr == "parking/gate/close";
+  bool isIndicatorTopic = topicStr == "parking/indicator/wrong-slot";
+
+  if (isIndicatorTopic) {
+    StaticJsonDocument<200> doc;
+    DeserializationError error = deserializeJson(doc, message);
+    if (error) {
+      Serial.print("✗ Failed to parse indicator JSON: ");
+      Serial.println(error.c_str());
+      return;
+    }
+    String state = doc["state"] | "off";
+    bool turnOn = state == "on" || doc["on"] == true;
+    digitalWrite(indicatorLedPin, turnOn ? HIGH : LOW);
+    indicatorLedOn = turnOn;
+    Serial.print("Indicator LED ");
+    Serial.println(turnOn ? "ON" : "OFF");
+    return;
+  }
 
   if (isOpenTopic || isCloseTopic) {
     StaticJsonDocument<200> doc;
@@ -497,22 +525,9 @@ void closeGate() {
 }
 
 void handleAutoCloseGate() {
-  if (gateServoOpen) {
-    // Auto-close gate after delay if any vehicle is still detected in any slot
-    bool vehicleDetected = false;
-    for (int i = 0; i < 4; i++) {
-      if (sensorStates[i]) {
-        vehicleDetected = true;
-        break;
-      }
-    }
-    
-    if (vehicleDetected) {
-      if (millis() - gateServoOpenTime > SERVO_AUTO_CLOSE_DELAY) {
-        Serial.println("Auto-closing entrance gate (vehicle detected)");
-        closeGate();
-      }
-    }
+  if (gateServoOpen && millis() - gateServoOpenTime >= SERVO_AUTO_CLOSE_DELAY) {
+    Serial.println("Auto-closing entrance gate (timer)");
+    closeGate();
   }
 }
 
