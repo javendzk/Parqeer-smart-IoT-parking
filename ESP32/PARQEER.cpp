@@ -69,8 +69,8 @@
 // ==================== CONFIGURATION ====================
 
 // WiFi Credentials
-#define WIFI_SSID "Wokwi-GUEST"
-#define WIFI_PASSWORD ""
+#define WIFI_SSID "Wifi EROR"
+#define WIFI_PASSWORD "nggaktau"
 
 // MQTT HiveMQ Cloud Configuration
 #define MQTT_BROKER "13b2db0db2624442893404a69ca826a1.s1.eu.hivemq.cloud"
@@ -94,7 +94,7 @@ const int gateServoPin = 26;
 const int indicatorLedPin = 2;
 
 // Buzzer Pin
-const int buzzerPin = 34;
+const int buzzerPin = 23;
 
 // Servo Positions
 const int SERVO_CLOSED = 90;
@@ -110,7 +110,7 @@ char keys[ROWS][COLS] = {
   {'*', '0', '#', 'D'}
 };
 byte rowPins[ROWS] = {32, 25, 4, 5};
-byte colPins[COLS] = {14, 27, 33, 26};
+byte colPins[COLS] = {14, 27, 33};
 
 // ==================== OBJECTS ====================
 
