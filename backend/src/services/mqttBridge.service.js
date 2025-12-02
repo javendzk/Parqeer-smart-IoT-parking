@@ -2,7 +2,7 @@ const { publish, subscribe } = require('../config/mqtt');
 const { query } = require('../config/db');
 const { getVoucherByCode, markVoucherUsed } = require('./voucher.service');
 const { processGateSensorEvent } = require('./gateManager.service');
-const { getActiveGateSession, createGateSession } = require('./gateSession.service');
+const { getActiveGateSession, createGateSession, completeGateSession } = require('./gateSession.service');
 const { logger } = require('../utils/logger');
 
 const logDeviceEvent = async (deviceId, type, payload) => {
@@ -100,9 +100,21 @@ const handleSlotStatus = async (topic, payload, app) => {
   await logDeviceEvent(payload?.deviceId || 'esp32', 'sensor-update-mqtt', { slotNumber, status: nextStatus });
 };
 
-const handleGateState = async (payload) => {
+const handleGateState = async (payload, app) => {
   await publishSystemNotify({ type: 'gate-state', ...payload });
   await logDeviceEvent(payload?.deviceId || 'esp32', 'gate-state', payload);
+
+  if ((payload?.state || '').toLowerCase() === 'closed') {
+    const activeSession = await getActiveGateSession();
+    if (activeSession) {
+      await completeGateSession(activeSession.id);
+      const io = app?.get('io');
+      if (io) {
+        io.emit('gateReady', { slotNumber: activeSession.slotNumber });
+      }
+      logger.info('Gate closed, advanced to next session', { slotNumber: activeSession.slotNumber });
+    }
+  }
 };
 
 const initMqttBridge = (app) => {
@@ -115,7 +127,7 @@ const initMqttBridge = (app) => {
   });
 
   subscribe('parking/gate/state', (payload) => {
-    handleGateState(payload).catch((error) => logger.error('Gate state MQTT failed', { error: error.message }));
+    handleGateState(payload, app).catch((error) => logger.error('Gate state MQTT failed', { error: error.message }));
   });
 };
 
