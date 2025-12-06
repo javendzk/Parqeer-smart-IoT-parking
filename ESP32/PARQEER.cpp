@@ -66,6 +66,10 @@
 #include <Keypad.h>
 #include <ArduinoJson.h>
 
+// ======== FreeRTOS (Task Management) ========
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 // ==================== CONFIGURATION ====================
 
 // WiFi Credentials
@@ -88,7 +92,7 @@
 const int irSensorPins[4] = {18, 19, 21, 22};
 
 // Entrance Gate Servo Motor Pin
-const int gateServoPin = 12;  // Changed from 26 to avoid keypad conflict
+const int gateServoPin = 26;  // Changed from 26 to avoid keypad conflict
 
 // Wrong-slot indicator LED Pin
 const int indicatorLedPin = 2;
@@ -144,12 +148,53 @@ bool ledActiveForReservedSlot = false; // Apakah LED sedang aktif untuk slot res
 bool buzzerActive = false;             // Apakah buzzer sedang aktif
 unsigned long buzzerActivationTime = 0; // Waktu buzzer dinyalakan
 
+// ==================== TASK MANAGEMENT ====================
+
+// Task handles
+TaskHandle_t taskWifiMqttHandle        = NULL;
+TaskHandle_t taskKeypadHandle         = NULL;
+TaskHandle_t taskSensorsHandle        = NULL;
+TaskHandle_t taskGateHandle           = NULL;
+TaskHandle_t taskPowerMemoryHandle    = NULL;
+
+// Memory management variables (no Serial print, hanya monitoring)
+volatile size_t currentFreeHeap = 0;
+volatile size_t minFreeHeap     = 0;
+
+// Forward declaration task functions
+void TaskWifiMqtt(void *pvParameters);
+void TaskKeypad(void *pvParameters);
+void TaskSensors(void *pvParameters);
+void TaskGate(void *pvParameters);
+void TaskPowerMemory(void *pvParameters);
+
+// Forward declaration existing functions (supaya jelas untuk compiler)
+void connectWiFi();
+void reconnectMQTT();
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+void handleKeypadInput();
+void checkAllSensors();
+void handleAutoCloseGate();
+void validateVoucher(String code);
+void checkSensor(int index);
+void sendSensorUpdate(int slotNumber, String status);
+void openGate();
+void closeGate();
+void sendServoCallback(String state);
+void logLedEvent(String state, int slotNumber, String reason);
+void logBuzzerEvent(String state, int slotNumber, String reason);
+void blinkSuccess();
+void blinkError();
+
 // ==================== SETUP ====================
 
 void setup() {
   Serial.begin(115200);
   Serial.println("\n=== Parqeer Smart Parking System (MQTT) ===");
   
+  // Turunkan frekuensi CPU untuk power management (tidak mengubah algoritma)
+  setCpuFrequencyMhz(80);
+
   // Initialize IR Sensors
   for (int i = 0; i < 4; i++) {
     pinMode(irSensorPins[i], INPUT_PULLUP);
@@ -183,36 +228,101 @@ void setup() {
   checkAllSensors();
   
   Serial.println("=== System Ready ===\n");
+
+  // Inisialisasi nilai awal memory management
+  currentFreeHeap = ESP.getFreeHeap();
+  minFreeHeap     = currentFreeHeap;
+
+  // ==================== CREATE RTOS TASKS ====================
+  // Task WiFi + MQTT (Core 0)
+xTaskCreatePinnedToCore(TaskWifiMqtt, "TaskWifiMqtt", 8192, NULL, 3, &taskWifiMqttHandle, 0);
+
+// Task Keypad (Core 1)
+xTaskCreatePinnedToCore(TaskKeypad, "TaskKeypad", 6144, NULL, 2, &taskKeypadHandle, 1);
+
+// Task Sensors (Core 1)
+xTaskCreatePinnedToCore(TaskSensors, "TaskSensors", 6144, NULL, 2, &taskSensorsHandle, 1);
+
+// Task Gate (Core 1)
+xTaskCreatePinnedToCore(TaskGate, "TaskGate", 4096, NULL, 1, &taskGateHandle, 1);
+
+// Task Power + Memory (Core 0)
+xTaskCreatePinnedToCore(TaskPowerMemory, "TaskPowerMemory", 4096, NULL, 1, &taskPowerMemoryHandle, 0);
+
 }
 
 // ==================== MAIN LOOP ====================
-
+// Algoritma utama sekarang dijalankan di RTOS Tasks.
+// Loop hanya idle supaya kompatibel dengan Arduino.
 void loop() {
-  // Handle WiFi reconnection
-  if (WiFi.status() != WL_CONNECTED) {
-    connectWiFi();
-  }
-  
-  // Handle MQTT connection and messages
-  if (!mqttClient.connected()) {
-    if (millis() - lastMqttReconnect > MQTT_RECONNECT_INTERVAL) {
-      reconnectMQTT();
-      lastMqttReconnect = millis();
+  vTaskDelay(1000 / portTICK_PERIOD_MS);
+}
+
+// ==================== RTOS TASK IMPLEMENTATIONS ====================
+
+void TaskWifiMqtt(void *pvParameters) {
+  (void) pvParameters;
+  for (;;) {
+    // Bagian ini tadinya di loop(): WiFi + MQTT
+    if (WiFi.status() != WL_CONNECTED) {
+      connectWiFi();
     }
-  } else {
-    mqttClient.loop();
+
+    if (!mqttClient.connected()) {
+      if (millis() - lastMqttReconnect > MQTT_RECONNECT_INTERVAL) {
+        reconnectMQTT();
+        lastMqttReconnect = millis();
+      }
+    } else {
+      mqttClient.loop();
+    }
+
+    vTaskDelay(10 / portTICK_PERIOD_MS); // sering, supaya MQTT responsif
   }
-  
-  // Check keypad for voucher input
-  handleKeypadInput();
-  
-  // Monitor all sensors
-  checkAllSensors();
-  
-  // Auto-close gate if needed
-  handleAutoCloseGate();
-  
-  delay(50);
+}
+
+void TaskKeypad(void *pvParameters) {
+  (void) pvParameters;
+  for (;;) {
+    // Tadinya di loop(): handleKeypadInput
+    handleKeypadInput();
+    vTaskDelay(20 / portTICK_PERIOD_MS);
+  }
+}
+
+void TaskSensors(void *pvParameters) {
+  (void) pvParameters;
+  for (;;) {
+    // Tadinya di loop(): checkAllSensors
+    checkAllSensors();
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+  }
+}
+
+void TaskGate(void *pvParameters) {
+  (void) pvParameters;
+  for (;;) {
+    // Tadinya di loop(): handleAutoCloseGate
+    handleAutoCloseGate();
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+  }
+}
+
+void TaskPowerMemory(void *pvParameters) {
+  (void) pvParameters;
+  for (;;) {
+    // Memory management: pantau heap (tanpa mengubah Serial output)
+    currentFreeHeap = ESP.getFreeHeap();
+    if (currentFreeHeap < minFreeHeap) {
+      minFreeHeap = currentFreeHeap;
+    }
+
+    // Power management tambahan bisa ditaruh di sini (tanpa Serial):
+    // misalnya: logika kalau idle lama -> bisa matikan beberapa peripheral, dsb.
+    // Di sini kita biarkan ringan saja, cukup modem sleep dan CPU freq di-setup.
+
+    vTaskDelay(5000 / portTICK_PERIOD_MS); // cek tiap 5 detik
+  }
 }
 
 // ==================== WIFI CONNECTION ====================
@@ -236,6 +346,9 @@ void connectWiFi() {
     Serial.println("\n✓ WiFi connected");
     Serial.print("IP Address: ");
     Serial.println(WiFi.localIP());
+
+    // Power management: aktifkan WiFi modem-sleep
+    WiFi.setSleep(true);
   } else {
     Serial.println("\n✗ WiFi connection failed!");
   }
