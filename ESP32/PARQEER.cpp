@@ -88,7 +88,7 @@
 const int irSensorPins[4] = {18, 19, 21, 22};
 
 // Entrance Gate Servo Motor Pin
-const int gateServoPin = 26;
+const int gateServoPin = 12;  // Changed from 26 to avoid keypad conflict
 
 // Wrong-slot indicator LED Pin
 const int indicatorLedPin = 2;
